@@ -20,9 +20,11 @@ import (
 	"bytes"
 	"fmt"
 
+	"errors"
+
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric/gossip/api"
 	"github.com/hyperledger/fabric/gossip/common"
-	"github.com/hyperledger/fabric/gossip/util"
 )
 
 // NewGossipMessageComparator creates a MessageReplacingPolicy given a maximum number of blocks to hold
@@ -41,8 +43,8 @@ func (mc *msgComparator) getMsgReplacingPolicy() common.MessageReplacingPolicy {
 }
 
 func (mc *msgComparator) invalidationPolicy(this interface{}, that interface{}) common.InvalidationResult {
-	thisMsg := this.(*GossipMessage)
-	thatMsg := that.(*GossipMessage)
+	thisMsg := this.(*SignedGossipMessage)
+	thatMsg := that.(*SignedGossipMessage)
 
 	if thisMsg.IsAliveMsg() && thatMsg.IsAliveMsg() {
 		return aliveInvalidationPolicy(thisMsg.GetAliveMsg(), thatMsg.GetAliveMsg())
@@ -68,14 +70,14 @@ func (mc *msgComparator) invalidationPolicy(this interface{}, that interface{}) 
 }
 
 func (mc *msgComparator) stateInvalidationPolicy(thisStateMsg *StateInfo, thatStateMsg *StateInfo) common.InvalidationResult {
-	if !bytes.Equal(thisStateMsg.PkiID, thatStateMsg.PkiID) {
+	if !bytes.Equal(thisStateMsg.PkiId, thatStateMsg.PkiId) {
 		return common.MessageNoAction
 	}
 	return compareTimestamps(thisStateMsg.Timestamp, thatStateMsg.Timestamp)
 }
 
 func (mc *msgComparator) identityInvalidationPolicy(thisIdentityMsg *PeerIdentity, thatIdentityMsg *PeerIdentity) common.InvalidationResult {
-	if bytes.Equal(thisIdentityMsg.PkiID, thatIdentityMsg.PkiID) {
+	if bytes.Equal(thisIdentityMsg.PkiId, thatIdentityMsg.PkiId) {
 		return common.MessageInvalidated
 	}
 
@@ -90,7 +92,7 @@ func (mc *msgComparator) dataInvalidationPolicy(thisDataMsg *DataMessage, thatDa
 		return common.MessageNoAction
 	}
 
-	diff := util.Abs(thisDataMsg.Payload.SeqNum, thatDataMsg.Payload.SeqNum)
+	diff := abs(thisDataMsg.Payload.SeqNum, thatDataMsg.Payload.SeqNum)
 	if diff <= uint64(mc.dataBlockStorageSize) {
 		return common.MessageNoAction
 	}
@@ -102,7 +104,7 @@ func (mc *msgComparator) dataInvalidationPolicy(thisDataMsg *DataMessage, thatDa
 }
 
 func aliveInvalidationPolicy(thisMsg *AliveMessage, thatMsg *AliveMessage) common.InvalidationResult {
-	if !bytes.Equal(thisMsg.Membership.PkiID, thatMsg.Membership.PkiID) {
+	if !bytes.Equal(thisMsg.Membership.PkiId, thatMsg.Membership.PkiId) {
 		return common.MessageNoAction
 	}
 
@@ -110,7 +112,7 @@ func aliveInvalidationPolicy(thisMsg *AliveMessage, thatMsg *AliveMessage) commo
 }
 
 func leaderInvalidationPolicy(thisMsg *LeadershipMessage, thatMsg *LeadershipMessage) common.InvalidationResult {
-	if !bytes.Equal(thisMsg.PkiID, thatMsg.PkiID) {
+	if !bytes.Equal(thisMsg.PkiId, thatMsg.PkiId) {
 		return common.MessageNoAction
 	}
 
@@ -170,7 +172,7 @@ func (m *GossipMessage) IsRemoteStateMessage() bool {
 
 // GetPullMsgType returns the phase of the pull mechanism this GossipMessage belongs to
 // for example: Hello, Digest, etc.
-// If this isn't a pull message, PullMsgType_Undefined is returned.
+// If this isn't a pull message, PullMsgType_UNDEFINED is returned.
 func (m *GossipMessage) GetPullMsgType() PullMsgType {
 	if helloMsg := m.GetHello(); helloMsg != nil {
 		return helloMsg.MsgType
@@ -188,7 +190,7 @@ func (m *GossipMessage) GetPullMsgType() PullMsgType {
 		return resMsg.MsgType
 	}
 
-	return PullMsgType_Undefined
+	return PullMsgType_UNDEFINED
 }
 
 // IsChannelRestricted returns whether this GossipMessage should be routed
@@ -233,11 +235,11 @@ func (m *GossipMessage) IsLeadershipMsg() bool {
 	return m.GetLeadershipMsg() != nil
 }
 
-// MsgConsumer invokes code given a GossipMessage
-type MsgConsumer func(*GossipMessage)
+// MsgConsumer invokes code given a SignedGossipMessage
+type MsgConsumer func(message *SignedGossipMessage)
 
-// IdentifierExtractor extracts from a GossipMessage an identifier
-type IdentifierExtractor func(*GossipMessage) string
+// IdentifierExtractor extracts from a SignedGossipMessage an identifier
+type IdentifierExtractor func(*SignedGossipMessage) string
 
 // IsTagLegal checks the GossipMessage tags and inner type
 // and returns an error if the tag doesn't match the type.
@@ -268,12 +270,12 @@ func (m *GossipMessage) IsTagLegal() error {
 
 	if m.IsPullMsg() {
 		switch m.GetPullMsgType() {
-		case PullMsgType_BlockMessage:
+		case PullMsgType_BLOCK_MSG:
 			if m.Tag != GossipMessage_CHAN_AND_ORG {
 				return fmt.Errorf("Tag should be %s", GossipMessage_Tag_name[int32(GossipMessage_CHAN_AND_ORG)])
 			}
 			return nil
-		case PullMsgType_IdentityMsg:
+		case PullMsgType_IDENTITY_MSG:
 			if m.Tag != GossipMessage_EMPTY {
 				return fmt.Errorf("Tag should be %s", GossipMessage_Tag_name[int32(GossipMessage_EMPTY)])
 			}
@@ -300,7 +302,13 @@ func (m *GossipMessage) IsTagLegal() error {
 	return fmt.Errorf("Unknown message type: %v", m)
 }
 
+// Verifier receives a peer identity, a signature and a message
+// and returns nil if the signature on the message could be verified
+// using the given identity.
 type Verifier func(peerIdentity []byte, signature, message []byte) error
+
+// Signer signs a message, and returns (signature, nil)
+// on success, and nil and an error on failure.
 type Signer func(msg []byte) ([]byte, error)
 
 // ReceivedMessage is a GossipMessage wrapper that
@@ -315,45 +323,224 @@ type ReceivedMessage interface {
 	Respond(msg *GossipMessage)
 
 	// GetGossipMessage returns the underlying GossipMessage
-	GetGossipMessage() *GossipMessage
+	GetGossipMessage() *SignedGossipMessage
 
-	// GetSourceMessage Returns the SignedGossipMessage the ReceivedMessage was
+	// GetSourceMessage Returns the Envelope the ReceivedMessage was
 	// constructed with
-	GetSourceMessage() *SignedGossipMessage
+	GetSourceEnvelope() *Envelope
 
-	// GetPKIID returns the PKI-ID of the remote peer
+	// GetConnectionInfo returns information about the remote peer
 	// that sent the message
-	GetPKIID() common.PKIidType
+	GetConnectionInfo() *ConnectionInfo
+}
+
+// ConnectionInfo represents information about
+// the remote peer that sent a certain ReceivedMessage
+type ConnectionInfo struct {
+	ID       common.PKIidType
+	Auth     *AuthInfo
+	Identity api.PeerIdentityType
+}
+
+func (connInfo *ConnectionInfo) IsAuthenticated() bool {
+	return connInfo.Auth != nil
+}
+
+// AuthInfo represents the authentication
+// data that was provided by the remote peer
+// at the connection time
+type AuthInfo struct {
+	SignedData []byte
+	Signature  []byte
 }
 
 // Sign signs a GossipMessage with given Signer.
-// Returns a signed message on success
-// or an error on failure
-func (m *GossipMessage) Sign(signer Signer) error {
-	m.Signature = nil
-	serializedMsg, err := proto.Marshal(m)
-	if err != nil {
-		return err
+// Returns an Envelope on success,
+// panics on failure.
+func (m *SignedGossipMessage) Sign(signer Signer) *Envelope {
+	// If we have a secretEnvelope, don't override it.
+	// Back it up, and restore it later
+	var secretEnvelope *SecretEnvelope
+	if m.Envelope != nil {
+		secretEnvelope = m.Envelope.SecretEnvelope
 	}
-	sig, err := signer(serializedMsg)
+	m.Envelope = nil
+	payload, err := proto.Marshal(m.GossipMessage)
 	if err != nil {
-		return err
+		panic(err)
 	}
-	m.Signature = sig
-	return nil
+	sig, err := signer(payload)
+	if err != nil {
+		panic(err)
+	}
+
+	e := &Envelope{
+		Payload:        payload,
+		Signature:      sig,
+		SecretEnvelope: secretEnvelope,
+	}
+	m.Envelope = e
+	return e
+}
+
+// NoopSign creates a SignedGossipMessage with a nil signature
+func (m *GossipMessage) NoopSign() *SignedGossipMessage {
+	signer := func(msg []byte) ([]byte, error) {
+		return nil, nil
+	}
+	sMsg := &SignedGossipMessage{
+		GossipMessage: m,
+	}
+	sMsg.Sign(signer)
+	return sMsg
 }
 
 // Verify verifies a signed GossipMessage with a given Verifier.
 // Returns nil on success, error on failure.
-func (m *GossipMessage) Verify(peerIdentity []byte, verify Verifier) error {
-	sig := m.Signature
-	defer func() {
-		m.Signature = sig
-	}()
-	m.Signature = nil
-	serializedMsg, err := proto.Marshal(m)
-	if err != nil {
-		return err
+func (m *SignedGossipMessage) Verify(peerIdentity []byte, verify Verifier) error {
+	if m.Envelope == nil {
+		return errors.New("Missing envelope")
 	}
-	return verify(peerIdentity, sig, serializedMsg)
+	if len(m.Envelope.Payload) == 0 {
+		return errors.New("Empty payload")
+	}
+	if len(m.Envelope.Signature) == 0 {
+		return errors.New("Empty signature")
+	}
+	payloadSigVerificationErr := verify(peerIdentity, m.Envelope.Signature, m.Envelope.Payload)
+	if payloadSigVerificationErr != nil {
+		return payloadSigVerificationErr
+	}
+	if m.Envelope.SecretEnvelope != nil {
+		payload := m.Envelope.SecretEnvelope.Payload
+		sig := m.Envelope.SecretEnvelope.Signature
+		if len(payload) == 0 {
+			return errors.New("Empty payload")
+		}
+		if len(sig) == 0 {
+			return errors.New("Empty signature")
+		}
+		return verify(peerIdentity, sig, payload)
+	}
+	return nil
+}
+
+// IsSigned returns whether the message
+// has a signature in the envelope.
+func (m *SignedGossipMessage) IsSigned() bool {
+	return m.Envelope != nil && m.Envelope.Payload != nil && m.Envelope.Signature != nil
+}
+
+// ToGossipMessage un-marshals a given envelope and creates a
+// SignedGossipMessage out of it.
+// Returns an error if un-marshaling fails.
+func (e *Envelope) ToGossipMessage() (*SignedGossipMessage, error) {
+	msg := &GossipMessage{}
+	err := proto.Unmarshal(e.Payload, msg)
+	if err != nil {
+		return nil, fmt.Errorf("Failed unmarshaling GossipMessage from envelope: %v", err)
+	}
+	return &SignedGossipMessage{
+		GossipMessage: msg,
+		Envelope:      e,
+	}, nil
+}
+
+// SignSecret signs the secret payload and creates
+// a secret envelope out of it.
+func (e *Envelope) SignSecret(signer Signer, secret *Secret) {
+	payload, err := proto.Marshal(secret)
+	if err != nil {
+		panic(err)
+	}
+	sig, err := signer(payload)
+	if err != nil {
+		panic(err)
+	}
+	e.SecretEnvelope = &SecretEnvelope{
+		Payload:   payload,
+		Signature: sig,
+	}
+}
+
+// InternalEndpoint returns the internal endpoint
+// in the secret envelope, or an empty string
+// if a failure occurs.
+func (s *SecretEnvelope) InternalEndpoint() string {
+	secret := &Secret{}
+	if err := proto.Unmarshal(s.Payload, secret); err != nil {
+		return ""
+	}
+	return secret.GetInternalEndpoint()
+}
+
+// SignedGossipMessage contains a GossipMessage
+// and the Envelope from which it came from
+type SignedGossipMessage struct {
+	*Envelope
+	*GossipMessage
+}
+
+func (p *Payload) toString() string {
+	return fmt.Sprintf("Block message: {Data: %d bytes, seq: %d}", len(p.Data), p.SeqNum)
+}
+
+func (du *DataUpdate) toString() string {
+	mType := PullMsgType_name[int32(du.MsgType)]
+	return fmt.Sprintf("Type: %s, items: %d, nonce: %d", mType, len(du.Data), du.Nonce)
+}
+
+func (mr *MembershipResponse) toString() string {
+	return fmt.Sprintf("MembershipResponse with Alive: %d, Dead: %d", len(mr.Alive), len(mr.Dead))
+}
+
+func (sis *StateInfoSnapshot) toString() string {
+	return fmt.Sprintf("StateInfoSnapshot with %d items", len(sis.Elements))
+}
+
+// String returns a string representation
+// of a SignedGossipMessage
+func (m *SignedGossipMessage) String() string {
+	env := "No envelope"
+	if m.Envelope != nil {
+		var secretEnv string
+		if m.SecretEnvelope != nil {
+			pl := len(m.SecretEnvelope.Payload)
+			sl := len(m.SecretEnvelope.Signature)
+			secretEnv = fmt.Sprintf(" Secret payload: %d bytes, Secret Signature: %d bytes", pl, sl)
+		}
+		env = fmt.Sprintf("%d bytes, Signature: %d bytes%s", len(m.Envelope.Payload), len(m.Envelope.Signature), secretEnv)
+	}
+	gMsg := "No gossipMessage"
+	if m.GossipMessage != nil {
+		var isSimpleMsg bool
+		if m.GetStateResponse() != nil {
+			gMsg = fmt.Sprintf("StateResponse with %d items", len(m.GetStateResponse().Payloads))
+		} else if m.IsDataMsg() {
+			gMsg = m.GetDataMsg().Payload.toString()
+		} else if m.IsDataUpdate() {
+			update := m.GetDataUpdate()
+			gMsg = fmt.Sprintf("DataUpdate: %s", update.toString())
+		} else if m.GetMemRes() != nil {
+			gMsg = m.GetMemRes().toString()
+		} else if m.IsStateInfoSnapshot() {
+			gMsg = m.GetStateSnapshot().toString()
+		} else {
+			gMsg = m.GossipMessage.String()
+			isSimpleMsg = true
+		}
+		if !isSimpleMsg {
+			desc := fmt.Sprintf("Channel: %v, nonce: %d, tag: %s", m.Channel, m.Nonce, GossipMessage_Tag_name[int32(m.Tag)])
+			gMsg = fmt.Sprintf("%s %s", desc, gMsg)
+		}
+	}
+	return fmt.Sprintf("GossipMessage: %v, Envelope: %s", gMsg, env)
+}
+
+// Abs returns abs(a-b)
+func abs(a, b uint64) uint64 {
+	if a > b {
+		return a - b
+	}
+	return b - a
 }

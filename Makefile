@@ -21,6 +21,7 @@
 #   - peer - builds a native fabric peer binary
 #   - orderer - builds a native fabric orderer binary
 #   - unit-test - runs the go-test based unit tests
+#   - test-cmd - generates a "go test" string suitable for manual customization
 #   - behave - runs the behave test
 #   - behave-deps - ensures pre-requisites are availble for running behave manually
 #   - gotools - installs go tools like golint
@@ -34,7 +35,7 @@
 #   - dist-clean - superset of 'clean' that also removes persistent state
 
 PROJECT_NAME   = hyperledger/fabric
-BASE_VERSION   = 0.7.0
+BASE_VERSION   = 1.0.0
 IS_RELEASE     = false
 
 ifneq ($(IS_RELEASE),true)
@@ -47,12 +48,13 @@ endif
 PKGNAME = github.com/$(PROJECT_NAME)
 CGO_FLAGS = CGO_CFLAGS=" "
 ARCH=$(shell uname -m)
-CHAINTOOL_RELEASE=v0.10.2
+CHAINTOOL_RELEASE=v0.10.3
 BASEIMAGE_RELEASE=$(shell cat ./.baseimage-release)
 
 # defined in common/metadata/metadata.go
 METADATA_VAR = Version=$(PROJECT_VERSION)
 METADATA_VAR += BaseVersion=$(BASEIMAGE_RELEASE)
+METADATA_VAR += BaseDockerLabel=$(BASE_DOCKER_LABEL)
 
 GO_LDFLAGS = $(patsubst %,-X $(PKGNAME)/common/metadata.%,$(METADATA_VAR))
 
@@ -67,7 +69,7 @@ K := $(foreach exec,$(EXECUTABLES),\
 GOSHIM_DEPS = $(shell ./scripts/goListFiles.sh $(PKGNAME)/core/chaincode/shim)
 JAVASHIM_DEPS =  $(shell git ls-files core/chaincode/shim/java)
 PROTOS = $(shell git ls-files *.proto | grep -v vendor)
-MSP_SAMPLECONFIG = $(shell git ls-files msp/sampleconfig/*.pem)
+MSP_SAMPLECONFIG = $(shell git ls-files msp/sampleconfig/*)
 PROJECT_FILES = $(shell git ls-files)
 IMAGES = peer orderer ccenv javaenv buildenv testenv zookeeper kafka couchdb
 
@@ -117,6 +119,10 @@ unit-test: peer-docker testenv couchdb
 
 unit-tests: unit-test
 
+# Generates a string to the terminal suitable for manual augmentation / re-issue, useful for running tests by hand
+test-cmd:
+	@echo "go test -ldflags \"$(GO_LDFLAGS)\""
+
 docker: $(patsubst %,build/image/%/$(DUMMY), $(IMAGES))
 native: peer orderer
 
@@ -131,6 +137,9 @@ behave-deps: docker peer build/bin/block-listener behave-environments
 behave: behave-deps
 	@echo "Running behave tests"
 	@cd bddtests; behave $(BEHAVE_OPTS)
+
+behave-peer-chaincode: build/bin/peer peer-docker orderer-docker
+	@cd peer/chaincode && behave
 
 linter: buildenv
 	@echo "LINT: Running code checks.."
@@ -221,6 +230,8 @@ build/image/%/Dockerfile: images/%/Dockerfile.in
 		| sed -e 's/_BASE_TAG_/$(BASE_DOCKER_TAG)/g' \
 		| sed -e 's/_TAG_/$(DOCKER_TAG)/g' \
 		> $@
+	@echo LABEL $(BASE_DOCKER_LABEL).version=$(PROJECT_VERSION) \\>>$@
+	@echo "     " $(BASE_DOCKER_LABEL).base.version=$(BASEIMAGE_RELEASE)>>$@
 
 build/image/%/$(DUMMY): Makefile build/image/%/payload build/image/%/Dockerfile
 	$(eval TARGET = ${patsubst build/image/%/$(DUMMY),%,${@}})

@@ -17,17 +17,14 @@ limitations under the License.
 package multichain
 
 import (
-	"fmt"
-
+	"github.com/hyperledger/fabric/common/config"
 	"github.com/hyperledger/fabric/common/configtx"
 	configtxapi "github.com/hyperledger/fabric/common/configtx/api"
-	configvaluesapi "github.com/hyperledger/fabric/common/configvalues"
-	ordererledger "github.com/hyperledger/fabric/orderer/ledger"
+	"github.com/hyperledger/fabric/orderer/ledger"
 	cb "github.com/hyperledger/fabric/protos/common"
 	"github.com/hyperledger/fabric/protos/utils"
 	"github.com/op/go-logging"
 
-	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/common/crypto"
 )
 
@@ -46,30 +43,30 @@ type configResources struct {
 	configtxapi.Manager
 }
 
-func (cr *configResources) SharedConfig() configvaluesapi.Orderer {
+func (cr *configResources) SharedConfig() config.Orderer {
 	return cr.OrdererConfig()
 }
 
 type ledgerResources struct {
 	*configResources
-	ledger ordererledger.ReadWriter
+	ledger ledger.ReadWriter
 }
 
 type multiLedger struct {
 	chains          map[string]*chainSupport
 	consenters      map[string]Consenter
-	ledgerFactory   ordererledger.Factory
+	ledgerFactory   ledger.Factory
 	signer          crypto.LocalSigner
 	systemChannelID string
 }
 
-func getConfigTx(reader ordererledger.Reader) *cb.Envelope {
-	lastBlock := ordererledger.GetBlock(reader, reader.Height()-1)
+func getConfigTx(reader ledger.Reader) *cb.Envelope {
+	lastBlock := ledger.GetBlock(reader, reader.Height()-1)
 	index, err := utils.GetLastConfigIndexFromBlock(lastBlock)
 	if err != nil {
 		logger.Panicf("Chain did not have appropriately encoded last config in its latest block: %s", err)
 	}
-	configBlock := ordererledger.GetBlock(reader, index)
+	configBlock := ledger.GetBlock(reader, index)
 	if configBlock == nil {
 		logger.Panicf("Config block does not exist")
 	}
@@ -78,7 +75,7 @@ func getConfigTx(reader ordererledger.Reader) *cb.Envelope {
 }
 
 // NewManagerImpl produces an instance of a Manager
-func NewManagerImpl(ledgerFactory ordererledger.Factory, consenters map[string]Consenter, signer crypto.LocalSigner) Manager {
+func NewManagerImpl(ledgerFactory ledger.Factory, consenters map[string]Consenter, signer crypto.LocalSigner) Manager {
 	ml := &multiLedger{
 		chains:        make(map[string]*chainSupport),
 		ledgerFactory: ledgerFactory,
@@ -141,38 +138,14 @@ func (ml *multiLedger) GetChain(chainID string) (ChainSupport, bool) {
 	return cs, ok
 }
 
-func newConfigResources(configEnvelope *cb.ConfigEnvelope) (*configResources, error) {
-	initializer := configtx.NewInitializer()
-	configManager, err := configtx.NewManagerImpl(configEnvelope, initializer, nil)
-	if err != nil {
-		return nil, fmt.Errorf("Error unpacking config transaction: %s", err)
-	}
-
-	return &configResources{
-		Manager: configManager,
-	}, nil
-}
-
 func (ml *multiLedger) newLedgerResources(configTx *cb.Envelope) *ledgerResources {
-	payload := &cb.Payload{}
-	err := proto.Unmarshal(configTx.Payload, payload)
-	if err != nil {
-		logger.Fatalf("Error unmarshaling a config transaction payload: %s", err)
-	}
-
-	configEnvelope := &cb.ConfigEnvelope{}
-	err = proto.Unmarshal(payload.Data, configEnvelope)
-	if err != nil {
-		logger.Fatalf("Error unmarshaling a config transaction to config envelope: %s", err)
-	}
-
-	configResources, err := newConfigResources(configEnvelope)
-
+	initializer := configtx.NewInitializer()
+	configManager, err := configtx.NewManagerImpl(configTx, initializer, nil)
 	if err != nil {
 		logger.Fatalf("Error creating configtx manager and handlers: %s", err)
 	}
 
-	chainID := configResources.ChainID()
+	chainID := configManager.ChainID()
 
 	ledger, err := ml.ledgerFactory.GetOrCreate(chainID)
 	if err != nil {
@@ -180,14 +153,14 @@ func (ml *multiLedger) newLedgerResources(configTx *cb.Envelope) *ledgerResource
 	}
 
 	return &ledgerResources{
-		configResources: configResources,
+		configResources: &configResources{Manager: configManager},
 		ledger:          ledger,
 	}
 }
 
 func (ml *multiLedger) newChain(configtx *cb.Envelope) {
 	ledgerResources := ml.newLedgerResources(configtx)
-	ledgerResources.ledger.Append(ordererledger.CreateNextBlock(ledgerResources.ledger, []*cb.Envelope{configtx}))
+	ledgerResources.ledger.Append(ledger.CreateNextBlock(ledgerResources.ledger, []*cb.Envelope{configtx}))
 
 	// Copy the map to allow concurrent reads from broadcast/deliver while the new chainSupport is
 	newChains := make(map[string]*chainSupport)
@@ -198,10 +171,14 @@ func (ml *multiLedger) newChain(configtx *cb.Envelope) {
 	cs := newChainSupport(createStandardFilters(ledgerResources), ledgerResources, ml.consenters, ml.signer)
 	chainID := ledgerResources.ChainID()
 
-	logger.Debugf("Created and starting new chain %s", chainID)
+	logger.Infof("Created and starting new chain %s", chainID)
 
 	newChains[string(chainID)] = cs
 	cs.start()
 
 	ml.chains = newChains
+}
+
+func (ml *multiLedger) channelsCount() int {
+	return len(ml.chains)
 }

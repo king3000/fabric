@@ -24,6 +24,7 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/rwset"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/version"
 	"github.com/hyperledger/fabric/core/ledger/ledgerconfig"
+	"github.com/hyperledger/fabric/core/ledger/util"
 	"github.com/hyperledger/fabric/protos/common"
 	putils "github.com/hyperledger/fabric/protos/utils"
 	logging "github.com/op/go-logging"
@@ -89,12 +90,28 @@ func (historyDB *historyDB) Commit(block *common.Block) error {
 
 	dbBatch := leveldbhelper.NewUpdateBatch()
 
-	logger.Debugf("Updating history database for blockNo [%v] with [%d] transactions",
-		blockNo, len(block.Data.Data))
+	logger.Debugf("Channel [%s]: Updating history database for blockNo [%v] with [%d] transactions",
+		historyDB.dbName, blockNo, len(block.Data.Data))
 
-	//TODO add check for invalid trans in bit array
+	// Get the invalidation byte array for the block
+	txsFilter := util.TxValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	// Initialize txsFilter if it does not yet exist (e.g. during testing, for genesis block, etc)
+	if len(txsFilter) == 0 {
+		txsFilter = util.NewTxValidationFlags(len(block.Data.Data))
+		block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER] = txsFilter
+	}
+
+	// write each tran's write set to history db
 	for _, envBytes := range block.Data.Data {
 		tranNo++
+
+		// If the tran is marked as invalid, skip it
+		// Note, tranNo starts at 1 for height, while tranIndex starts at 0 for invalid array
+		if txsFilter.IsInvalid(int(tranNo) - 1) {
+			logger.Debugf("Channel [%s]: Skipping history write for invalid transaction number %d",
+				historyDB.dbName, tranNo)
+			continue
+		}
 
 		env, err := putils.GetEnvelopeFromBlock(envBytes)
 		if err != nil {
@@ -157,7 +174,7 @@ func (historyDB *historyDB) Commit(block *common.Block) error {
 		return err
 	}
 
-	logger.Debugf("Updates committed to history database for blockNo [%v]", blockNo)
+	logger.Debugf("Channel [%s]: Updates committed to history database for blockNo [%v]", historyDB.dbName, blockNo)
 	return nil
 }
 

@@ -28,7 +28,7 @@ import (
 	"google.golang.org/grpc"
 )
 
-type handler func(*proto.GossipMessage)
+type handler func(message *proto.SignedGossipMessage)
 
 type connFactory interface {
 	createConnection(endpoint string, pkiID common.PKIidType) (*connection, error)
@@ -89,7 +89,10 @@ func (cs *connectionStore) getConnection(peer *RemotePeer) (*connection, error) 
 
 	destinationLock.Unlock()
 
-	if cs.isClosing {
+	cs.RLock()
+	isClosing = cs.isClosing
+	cs.RUnlock()
+	if isClosing {
 		return nil, errors.New("ConnStore is closing")
 	}
 
@@ -141,10 +144,15 @@ func (cs *connectionStore) shutdown() {
 	cs.Lock()
 	cs.isClosing = true
 	pkiIds2conn := cs.pki2Conn
+
+	var connections2Close []*connection
+	for _, conn := range pkiIds2conn {
+		connections2Close = append(connections2Close, conn)
+	}
 	cs.Unlock()
 
 	wg := sync.WaitGroup{}
-	for _, conn := range pkiIds2conn {
+	for _, conn := range connections2Close {
 		wg.Add(1)
 		go func(conn *connection) {
 			cs.closeByPKIid(conn.pkiID)
@@ -154,22 +162,23 @@ func (cs *connectionStore) shutdown() {
 	wg.Wait()
 }
 
-func (cs *connectionStore) onConnected(serverStream proto.Gossip_GossipStreamServer, pkiID common.PKIidType) *connection {
+func (cs *connectionStore) onConnected(serverStream proto.Gossip_GossipStreamServer, connInfo *proto.ConnectionInfo) *connection {
 	cs.Lock()
 	defer cs.Unlock()
 
-	if c, exists := cs.pki2Conn[string(pkiID)]; exists {
+	if c, exists := cs.pki2Conn[string(connInfo.Identity)]; exists {
 		c.close()
 	}
 
-	return cs.registerConn(pkiID, serverStream)
+	return cs.registerConn(connInfo, serverStream)
 }
 
-func (cs *connectionStore) registerConn(pkiID common.PKIidType, serverStream proto.Gossip_GossipStreamServer) *connection {
+func (cs *connectionStore) registerConn(connInfo *proto.ConnectionInfo, serverStream proto.Gossip_GossipStreamServer) *connection {
 	conn := newConnection(nil, nil, nil, serverStream)
-	conn.pkiID = pkiID
+	conn.pkiID = connInfo.ID
+	conn.info = connInfo
 	conn.logger = cs.logger
-	cs.pki2Conn[string(pkiID)] = conn
+	cs.pki2Conn[string(connInfo.ID)] = conn
 	return conn
 }
 
@@ -197,6 +206,7 @@ func newConnection(cl proto.GossipClient, c *grpc.ClientConn, cs proto.Gossip_Go
 }
 
 type connection struct {
+	info         *proto.ConnectionInfo
 	outBuff      chan *msgSending
 	logger       *logging.Logger                 // logger
 	pkiID        common.PKIidType                // pkiID of the remote endpoint
@@ -239,7 +249,7 @@ func (conn *connection) toDie() bool {
 	return atomic.LoadInt32(&(conn.stopFlag)) == int32(1)
 }
 
-func (conn *connection) send(msg *proto.GossipMessage, onErr func(error)) {
+func (conn *connection) send(msg *proto.SignedGossipMessage, onErr func(error)) {
 	conn.Lock()
 	defer conn.Unlock()
 
@@ -249,8 +259,8 @@ func (conn *connection) send(msg *proto.GossipMessage, onErr func(error)) {
 	}
 
 	m := &msgSending{
-		msg:   msg,
-		onErr: onErr,
+		envelope: msg.Envelope,
+		onErr:    onErr,
 	}
 
 	conn.outBuff <- m
@@ -258,7 +268,7 @@ func (conn *connection) send(msg *proto.GossipMessage, onErr func(error)) {
 
 func (conn *connection) serviceConnection() error {
 	errChan := make(chan error, 1)
-	msgChan := make(chan *proto.GossipMessage, util.GetIntOrDefault("peer.gossip.recvBuffSize", defRecvBuffSize))
+	msgChan := make(chan *proto.SignedGossipMessage, util.GetIntOrDefault("peer.gossip.recvBuffSize", defRecvBuffSize))
 	defer close(msgChan)
 
 	// Call stream.Recv() asynchronously in readFromStream(),
@@ -294,7 +304,7 @@ func (conn *connection) writeToStream() {
 		}
 		select {
 		case m := <-conn.outBuff:
-			err := stream.Send(m.msg)
+			err := stream.Send(m.envelope)
 			if err != nil {
 				go m.onErr(err)
 				return
@@ -308,7 +318,7 @@ func (conn *connection) writeToStream() {
 	}
 }
 
-func (conn *connection) readFromStream(errChan chan error, msgChan chan *proto.GossipMessage) {
+func (conn *connection) readFromStream(errChan chan error, msgChan chan *proto.SignedGossipMessage) {
 	defer func() {
 		recover()
 	}() // msgChan might be closed
@@ -319,7 +329,7 @@ func (conn *connection) readFromStream(errChan chan error, msgChan chan *proto.G
 			errChan <- errors.New("Stream is nil")
 			return
 		}
-		msg, err := stream.Recv()
+		envelope, err := stream.Recv()
 		if conn.toDie() {
 			conn.logger.Debug(conn.pkiID, "canceling read because closing")
 			return
@@ -328,6 +338,11 @@ func (conn *connection) readFromStream(errChan chan error, msgChan chan *proto.G
 			errChan <- err
 			conn.logger.Debug(conn.pkiID, "Got error, aborting:", err)
 			return
+		}
+		msg, err := envelope.ToGossipMessage()
+		if err != nil {
+			errChan <- err
+			conn.logger.Warning(conn.pkiID, "Got error, aborting:", err)
 		}
 		msgChan <- msg
 	}
@@ -354,6 +369,6 @@ func (conn *connection) getStream() stream {
 }
 
 type msgSending struct {
-	msg   *proto.GossipMessage
-	onErr func(error)
+	envelope *proto.Envelope
+	onErr    func(error)
 }

@@ -168,12 +168,23 @@ func NewChaincodeSupport(getPeerEndpoint func() (*pb.PeerEndpoint, error), userr
 		theChaincodeSupport.keepalive = time.Duration(t) * time.Second
 	}
 
+	//default chaincode execute timeout is 30000ms (30 secs)
+	execto := 30000
+	if eto := viper.GetInt("chaincode.executetimeout"); eto <= 1000 {
+		chaincodeLogger.Errorf("Invalid execute timeout value %d (should be at least 1000ms) defaulting to %d ms", eto, execto)
+	} else {
+		chaincodeLogger.Debugf("Setting execute timeout value to %d ms", eto)
+		execto = eto
+	}
+
+	theChaincodeSupport.executetimeout = time.Duration(execto) * time.Millisecond
+
 	viper.SetEnvPrefix("CORE")
 	viper.AutomaticEnv()
 	replacer := strings.NewReplacer(".", "_")
 	viper.SetEnvKeyReplacer(replacer)
 
-	chaincodeLogLevelString := viper.GetString("logging.chaincode")
+	chaincodeLogLevelString := viper.GetString("chaincode.logLevel")
 	chaincodeLogLevel, err := logging.LogLevel(chaincodeLogLevelString)
 
 	if err == nil {
@@ -182,6 +193,7 @@ func NewChaincodeSupport(getPeerEndpoint func() (*pb.PeerEndpoint, error), userr
 		chaincodeLogger.Warningf("Chaincode logging level %s is invalid; defaulting to %s", chaincodeLogLevelString, flogging.DefaultLevel().String())
 		theChaincodeSupport.chaincodeLogLevel = flogging.DefaultLevel().String()
 	}
+	theChaincodeSupport.logFormat = viper.GetString("chaincode.logFormat")
 
 	return theChaincodeSupport
 }
@@ -206,6 +218,8 @@ type ChaincodeSupport struct {
 	peerTLSSvrHostOrd string
 	keepalive         time.Duration
 	chaincodeLogLevel string
+	logFormat         string
+	executetimeout    time.Duration
 }
 
 // DuplicateChaincodeHandlerError returned if attempt to register same chaincodeID while a stream already exists.
@@ -345,32 +359,22 @@ func (chaincodeSupport *ChaincodeSupport) getArgsAndEnv(cccid *ccprovider.CCCont
 	}
 
 	if chaincodeSupport.chaincodeLogLevel != "" {
-		envs = append(envs, "CORE_LOGGING_CHAINCODE="+chaincodeSupport.chaincodeLogLevel)
+		envs = append(envs, "CORE_CHAINCODE_LOGLEVEL="+chaincodeSupport.chaincodeLogLevel)
 	}
 
+	if chaincodeSupport.logFormat != "" {
+		envs = append(envs, "CORE_CHAINCODE_LOGFORMAT="+chaincodeSupport.logFormat)
+	}
 	switch cLang {
 	case pb.ChaincodeSpec_GOLANG, pb.ChaincodeSpec_CAR:
-		//chaincode executable will be same as the name of the chaincode
 		args = []string{"chaincode", fmt.Sprintf("-peer.address=%s", chaincodeSupport.peerAddress)}
-		chaincodeLogger.Debugf("Executable is %s", args[0])
 	case pb.ChaincodeSpec_JAVA:
-		//TODO add security args
-		args = strings.Split(
-			fmt.Sprintf("java -jar chaincode.jar -a %s -i %s",
-				chaincodeSupport.peerAddress, cccid.Name),
-			" ")
-		if chaincodeSupport.peerTLS {
-			args = append(args, "-s")
-			if chaincodeSupport.peerTLSSvrHostOrd != "" {
-				args = append(args, "-o")
-				args = append(args, chaincodeSupport.peerTLSSvrHostOrd)
-			}
-		}
-		chaincodeLogger.Debugf("Executable is %s", args[0])
-		chaincodeLogger.Debugf("Args %v", args)
+		args = []string{"java", "-jar", "chaincode.jar", "--peerAddress", chaincodeSupport.peerAddress}
 	default:
 		return nil, nil, fmt.Errorf("Unknown chaincodeType: %s", cLang)
 	}
+	chaincodeLogger.Debugf("Executable is %s", args[0])
+	chaincodeLogger.Debugf("Args %v", args)
 	return args, envs, nil
 }
 
@@ -401,6 +405,8 @@ func (chaincodeSupport *ChaincodeSupport) launchAndWaitForRegister(ctxt context.
 	}
 
 	chaincodeLogger.Debugf("start container: %s(networkid:%s,peerid:%s)", canName, chaincodeSupport.peerNetworkID, chaincodeSupport.peerID)
+	chaincodeLogger.Debugf("start container with args: %s", strings.Join(args, " "))
+	chaincodeLogger.Debugf("start container with env:\n\t%s", strings.Join(env, "\n\t"))
 
 	vmtype, _ := chaincodeSupport.getVMType(cds)
 
@@ -479,7 +485,6 @@ func (chaincodeSupport *ChaincodeSupport) Launch(context context.Context, cccid 
 	//build the chaincode
 	var cID *pb.ChaincodeID
 	var cMsg *pb.ChaincodeInput
-	var cLang pb.ChaincodeSpec_Type
 
 	var cds *pb.ChaincodeDeploymentSpec
 	var ci *pb.ChaincodeInvocationSpec
@@ -491,7 +496,6 @@ func (chaincodeSupport *ChaincodeSupport) Launch(context context.Context, cccid 
 	if cds != nil {
 		cID = cds.ChaincodeSpec.ChaincodeId
 		cMsg = cds.ChaincodeSpec.Input
-		cLang = cds.ChaincodeSpec.Type
 	} else {
 		cID = ci.ChaincodeSpec.ChaincodeId
 		cMsg = ci.ChaincodeSpec.Input
@@ -548,8 +552,6 @@ func (chaincodeSupport *ChaincodeSupport) Launch(context context.Context, cccid 
 		if err != nil {
 			return cID, cMsg, fmt.Errorf("failed to unmarshal deployment transactions for %s - %s", canName, err)
 		}
-
-		cLang = cds.ChaincodeSpec.Type
 	}
 
 	//from here on : if we launch the container and get an error, we need to stop the container
@@ -566,12 +568,18 @@ func (chaincodeSupport *ChaincodeSupport) Launch(context context.Context, cccid 
 				if err != nil {
 					return cID, cMsg, err
 				}
-				cds.CodePackage = cdsfs.CodePackage
+				//we should use cdsfs completely. It is just a vestige of old protocol that we
+				//continue to use ChaincodeDeploymentSpec for anything other than Install. In
+				//particular, instantiate, invoke, upgrade should be using just some form of
+				//ChaincodeInvocationSpec.
+				cds = cdsfs
 				chaincodeLogger.Debugf("launchAndWaitForRegister fetched %d from file system", len(cds.CodePackage), err)
 			}
 		}
 
 		builder := func() (io.Reader, error) { return platforms.GenerateDockerBuild(cds) }
+
+		cLang := cds.ChaincodeSpec.Type
 		err = chaincodeSupport.launchAndWaitForRegister(context, cccid, cds, cLang, builder)
 		if err != nil {
 			chaincodeLogger.Errorf("launchAndWaitForRegister failed %s", err)

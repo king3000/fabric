@@ -17,15 +17,6 @@ server:
         # TLS certificate and key file paths
         tls:
 
-security:
-    # Can be 256 or 384
-    # Must be the same as in core.yaml
-    level: 256
-
-    # Can be SHA2 or SHA3
-    # Must be the same as in core.yaml
-    hashAlgorithm: SHA3
-
 # Enabling/disabling different logging levels of the CA.
 #
 logging:
@@ -322,6 +313,21 @@ peer:
         enabled:     false
         listenAddress: 0.0.0.0:6060
 
+    mspConfigPath: ../../msp/sampleconfig
+    
+    # BCCSP (Blockchain crypto provider): Select which crypto implementation or
+    # library to use
+    BCCSP:
+        Default: SW
+        SW:
+            # TODO: The default Hash and Security level needs refactoring to be
+            # fully configurable. Changing these defaults requires coordination
+            # SHA2 is hardcoded in several places, not only BCCSP
+            Hash: SHA2
+            Security: 256
+            FileKeyStore: 
+                KeyStore:
+            
 ###############################################################################
 #
 #    VM section

@@ -71,7 +71,7 @@ func TestNoopMSP(t *testing.T) {
 }
 
 func TestMSPSetupBad(t *testing.T) {
-	_, err := GetLocalMspConfig("barf", "DEFAULT")
+	_, err := GetLocalMspConfig("barf", nil, "DEFAULT")
 	if err == nil {
 		t.Fatalf("Setup should have failed on an invalid config file")
 		return
@@ -277,13 +277,46 @@ func TestOUPolicyPrincipal(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestAdminPolicyPrincipal(t *testing.T) {
+	id, err := localMsp.GetDefaultSigningIdentity()
+	assert.NoError(t, err)
+
+	principalBytes, err := proto.Marshal(&common.MSPRole{Role: common.MSPRole_ADMIN, MspIdentifier: "DEFAULT"})
+	assert.NoError(t, err)
+
+	principal := &common.MSPPrincipal{
+		PrincipalClassification: common.MSPPrincipal_ROLE,
+		Principal:               principalBytes}
+
+	err = id.SatisfiesPrincipal(principal)
+	assert.NoError(t, err)
+}
+
+func TestAdminPolicyPrincipalFails(t *testing.T) {
+	id, err := localMsp.GetDefaultSigningIdentity()
+	assert.NoError(t, err)
+
+	principalBytes, err := proto.Marshal(&common.MSPRole{Role: common.MSPRole_ADMIN, MspIdentifier: "DEFAULT"})
+	assert.NoError(t, err)
+
+	principal := &common.MSPPrincipal{
+		PrincipalClassification: common.MSPPrincipal_ROLE,
+		Principal:               principalBytes}
+
+	// remove the admin so validation will fail
+	localMsp.(*bccspmsp).admins = make([]Identity, 0)
+
+	err = id.SatisfiesPrincipal(principal)
+	assert.Error(t, err)
+}
+
 var conf *msp.MSPConfig
 var localMsp MSP
 var mspMgr MSPManager
 
 func TestMain(m *testing.M) {
 	var err error
-	conf, err = GetLocalMspConfig("./sampleconfig/", "DEFAULT")
+	conf, err = GetLocalMspConfig("./sampleconfig/", nil, "DEFAULT")
 	if err != nil {
 		fmt.Printf("Setup should have succeeded, got err %s instead", err)
 		os.Exit(-1)

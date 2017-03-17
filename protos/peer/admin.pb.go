@@ -15,6 +15,7 @@ It is generated from these files:
 	peer/peer.proto
 	peer/proposal.proto
 	peer/proposal_response.proto
+	peer/query.proto
 	peer/transaction.proto
 
 It has these top-level messages:
@@ -56,6 +57,10 @@ It has these top-level messages:
 	Response
 	ProposalResponsePayload
 	Endorsement
+	ChaincodeQueryResponse
+	ChaincodeInfo
+	ChannelQueryResponse
+	ChannelInfo
 	SignedTransaction
 	ProcessedTransaction
 	Transaction

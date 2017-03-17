@@ -32,7 +32,6 @@ logging:
     peer:       warning
     node:       info
     network:    warning
-    chaincode:  warning
     version:    warning
     protoutils: debug
     error:      warning
@@ -69,8 +68,12 @@ peer:
 
     # Gossip related configuration
     gossip:
-        bootstrap: 0.0.0.0:7051
+        bootstrap: 127.0.0.1:7051
+        # Use automatically chosen peer (high avalibility) to distribute blocks in channel or static one
+        # Setting this true and orgLeader true cause panic exit
+        useLeaderElection: false
         # For debug - is peer is its org leader and should pass blocks from orderer to other peers in org
+        # Works only if useLeaderElection set to false
         orgLeader: true
         # ID of this instance
         endpoint:
@@ -114,10 +117,29 @@ peer:
         requestWaitTime: 1s
         # Time to wait before pull engine ends pull (unit: second)
         responseWaitTime: 2s
-
+        # Alive check interval(unit: second)
+        aliveTimeInterval: 5s
+        # Alive expiration timeout(unit: second)
+        aliveExpirationTimeout: 25s
+        # Reconnect interval(unit: second)
+        reconnectInterval: 25s
         # This is an endpoint that is published to peers outside of the organization.
         # If this isn't set, the peer will not be known to other organizations.
         externalEndpoint:
+        # Makes gossip skip verification of remote peer signature when performing
+        # the authentication handshake with remote peers
+        skipHandshake: false
+
+        # Leader election service configuration
+        election:
+            # Longest time peer wait for stable membership during leader election startup (unit: second)
+            startupGracePeriod: 15s
+            # Interval gossip membership sampled to check its stability (unit: second)
+            membershipSampleInterval: 1s
+            # Time pass since last declaration message before peer decide to go to election (unit: second)
+            leaderAliveThreshold: 10s
+            # Time between peer sends propose message and declare itself as a leader (sends declaration message) (unit: second)
+            leaderElectionDuration: 5s
 
     # Sync related configuration
     sync:
@@ -162,20 +184,6 @@ peer:
         # if > 0, if buffer full, blocks till timeout
         timeout: 10
 
-    # ----!!!!IMPORTANT!!!-!!!IMPORTANT!!!-!!!IMPORTANT!!!!----
-    # THIS HAS TO BE DONE IN THE CONTEXT OF BOOTSTRAP. TILL THAT
-    # IS DESIGNED AND FINALIZED, THE FOLLOWING COMMITTER/ORDERER
-    # DEFINITIONS HAVE TO SERVE AS THE MEANS TO DRIVE A SIMPLE
-    # SKELETON.
-    #
-    # All "chaincode" commands from CLI (except "query") will
-    # send response from the endorser to the Committer defined below.
-    committer:
-        enabled: true
-        ledger:
-            # orderer to talk to
-            orderer: 0.0.0.0:7050
-
     # TLS Settings for p2p communications
     tls:
         enabled:  false
@@ -188,12 +196,27 @@ peer:
     # this is sent to client to validate the recived certificate from server when
     # establishing TLS connection
         rootcert:
-            file:
+            file: testdata/server1.pem
         # The server name use to verify the hostname returned by TLS handshake
         serverhostoverride:
 
     # Path on the file system where peer will store data (eg ledger)
     fileSystemPath: /var/hyperledger/production
+
+    # BCCSP (Blockchain crypto provider): Select which crypto implementation or
+    # library to use
+    BCCSP:
+        Default: SW
+        SW:
+            # TODO: The default Hash and Security level needs refactoring to be
+            # fully configurable. Changing these defaults requires coordination
+            # SHA2 is hardcoded in several places, not only BCCSP
+            Hash: SHA2
+            Security: 256
+            # Location of Key Store, can be subdirectory of SbftLocal.DataDir
+            FileKeyStore:
+                # If "", defaults to 'mspConfigPath'/keystore
+                KeyStore:
 
     # Path on the file system where peer will find MSP local configurations
     mspConfigPath: msp/sampleconfig
@@ -300,6 +323,11 @@ chaincode:
     # to come through. 1sec should be plenty for chaincode unit tests
     startuptimeout: 300000
 
+    # timeout in millisecs for invokes and initialize commands
+    # this timeout is used by all chaincodes in all the channels including
+    # system chaincodes. Default is 30000ms (30 seconds)
+    executetimeout: 30000
+
     #timeout in millisecs for deploying chaincode from a remote repository.
     deploytimeout: 30000
 
@@ -326,6 +354,10 @@ chaincode:
         vscc: enable
         qscc: enable
 
+    # logging section for the chaincode container
+    logLevel: warning
+    logFormat: '%{color}%{time:2006-01-02 15:04:05.000 MST} [%{module}] %{shortfunc} -> %{level:.4s} %{id:03x}%{color:reset} %{message}'
+
 ###############################################################################
 #
 #    Ledger section - ledger configuration encompases both the blockchain
@@ -346,9 +378,9 @@ ledger:
        username:
        password:
 
-       # Limit on the number of records to return per query
-       queryLimit: 1000
-
     # historyDatabase - options are true or false
     # Indicates if the history of key updates should be stored in goleveldb
     historyDatabase: true
+
+    # Limit on the number of records to return per query
+    queryLimit: 10000

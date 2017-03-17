@@ -18,6 +18,8 @@ package comm
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"crypto/tls"
 	"fmt"
 	"math/rand"
@@ -27,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyperledger/fabric/bccsp/factory"
 	"github.com/hyperledger/fabric/gossip/api"
 	"github.com/hyperledger/fabric/gossip/common"
 	"github.com/hyperledger/fabric/gossip/identity"
@@ -41,13 +44,17 @@ import (
 
 func init() {
 	rand.Seed(42)
+	factory.InitFactories(nil)
 }
 
 func acceptAll(msg interface{}) bool {
 	return true
 }
 
-var naiveSec = &naiveSecProvider{}
+var (
+	naiveSec = &naiveSecProvider{}
+	hmacKey  = []byte{0, 0, 0}
+)
 
 type naiveSecProvider struct {
 }
@@ -63,22 +70,26 @@ func (*naiveSecProvider) GetPKIidOfCert(peerIdentity api.PeerIdentityType) commo
 
 // VerifyBlock returns nil if the block is properly signed,
 // else returns error
-func (*naiveSecProvider) VerifyBlock(chainID common.ChainID, signedBlock api.SignedBlock) error {
+func (*naiveSecProvider) VerifyBlock(chainID common.ChainID, signedBlock []byte) error {
 	return nil
 }
 
 // Sign signs msg with this peer's signing key and outputs
 // the signature if no error occurred.
 func (*naiveSecProvider) Sign(msg []byte) ([]byte, error) {
-	return msg, nil
+	mac := hmac.New(sha256.New, hmacKey)
+	mac.Write(msg)
+	return mac.Sum(nil), nil
 }
 
 // Verify checks that signature is a valid signature of message under a peer's verification key.
 // If the verification succeeded, Verify returns nil meaning no error occurred.
 // If peerCert is nil, then the signature is verified against this peer's verification key.
 func (*naiveSecProvider) Verify(peerIdentity api.PeerIdentityType, signature, message []byte) error {
-	equal := bytes.Equal(signature, message)
-	if !equal {
+	mac := hmac.New(sha256.New, hmacKey)
+	mac.Write(message)
+	expected := mac.Sum(nil)
+	if !bytes.Equal(signature, expected) {
 		return fmt.Errorf("Wrong certificate:%v, %v", signature, message)
 	}
 	return nil
@@ -96,16 +107,22 @@ func newCommInstance(port int, sec api.MessageCryptoService) (Comm, error) {
 	return inst, err
 }
 
-func handshaker(endpoint string, comm Comm, t *testing.T, sigMutator func([]byte) []byte, pkiIDmutator func([]byte) []byte) <-chan proto.ReceivedMessage {
+func handshaker(endpoint string, comm Comm, t *testing.T, sigMutator func([]byte) []byte, pkiIDmutator func([]byte) []byte, mutualTLS bool) <-chan proto.ReceivedMessage {
 	c := &commImpl{}
 	err := generateCertificates("key.pem", "cert.pem")
 	defer os.Remove("cert.pem")
 	defer os.Remove("key.pem")
 	cert, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
-	ta := credentials.NewTLS(&tls.Config{
+	tlsCfg := &tls.Config{
 		InsecureSkipVerify: true,
-		Certificates:       []tls.Certificate{cert},
-	})
+	}
+
+	if mutualTLS {
+		tlsCfg.Certificates = []tls.Certificate{cert}
+	}
+
+	ta := credentials.NewTLS(tlsCfg)
+
 	acceptChan := comm.Accept(acceptAll)
 	conn, err := grpc.Dial("localhost:9611", grpc.WithTransportCredentials(&authCreds{tlsCreds: ta}), grpc.WithBlock(), grpc.WithTimeout(time.Second))
 	assert.NoError(t, err, "%v", err)
@@ -117,8 +134,12 @@ func handshaker(endpoint string, comm Comm, t *testing.T, sigMutator func([]byte
 	assert.NoError(t, err, "%v", err)
 	if err != nil {
 		return nil
+	} // cert.Certificate[0]
+
+	var clientCertHash []byte
+	if mutualTLS {
+		clientCertHash = certHashFromRawCert(tlsCfg.Certificates[0].Certificate[0])
 	}
-	clientCertHash := certHashFromRawCert(cert.Certificate[0])
 
 	pkiID := common.PKIidType(endpoint)
 	if pkiIDmutator != nil {
@@ -126,28 +147,40 @@ func handshaker(endpoint string, comm Comm, t *testing.T, sigMutator func([]byte
 	}
 	assert.NoError(t, err, "%v", err)
 	msg := c.createConnectionMsg(pkiID, clientCertHash, []byte(endpoint), func(msg []byte) ([]byte, error) {
-		return msg, nil
+		if !mutualTLS {
+			return msg, nil
+		}
+		mac := hmac.New(sha256.New, hmacKey)
+		mac.Write(msg)
+		return mac.Sum(nil), nil
 	})
 
 	if sigMutator != nil {
-		msg.Signature = sigMutator(msg.Signature)
+		msg.Envelope.Signature = sigMutator(msg.Envelope.Signature)
 	}
 
-	stream.Send(msg)
-	msg, err = stream.Recv()
+	stream.Send(msg.Envelope)
+	envelope, err := stream.Recv()
+	assert.NoError(t, err, "%v", err)
+	msg, err = envelope.ToGossipMessage()
 	assert.NoError(t, err, "%v", err)
 	if sigMutator == nil {
 		hash := extractCertificateHashFromContext(stream.Context())
 		expectedMsg := c.createConnectionMsg(common.PKIidType("localhost:9611"), hash, []byte("localhost:9611"), func(msg []byte) ([]byte, error) {
-			return msg, nil
+			mac := hmac.New(sha256.New, hmacKey)
+			mac.Write(msg)
+			return mac.Sum(nil), nil
 		})
-		assert.Equal(t, expectedMsg.Signature, msg.Signature)
+		if mutualTLS {
+			assert.Equal(t, expectedMsg.Envelope.Signature, msg.Envelope.Signature)
+		}
+
 	}
-	assert.Equal(t, []byte("localhost:9611"), msg.GetConn().PkiID)
+	assert.Equal(t, []byte("localhost:9611"), msg.GetConn().PkiId)
 	msg2Send := createGossipMsg()
 	nonce := uint64(rand.Int())
 	msg2Send.Nonce = nonce
-	go stream.Send(msg2Send)
+	go stream.Send(msg2Send.Envelope)
 	return acceptChan
 }
 
@@ -173,10 +206,17 @@ func TestHandshake(t *testing.T) {
 	comm, _ := newCommInstance(9611, naiveSec)
 	defer comm.Stop()
 
-	acceptChan := handshaker("localhost:9610", comm, t, nil, nil)
+	acceptChan := handshaker("localhost:9610", comm, t, nil, nil, true)
 	time.Sleep(2 * time.Second)
 	assert.Equal(t, 1, len(acceptChan))
-
+	msg := <-acceptChan
+	expectedPKIID := common.PKIidType("localhost:9610")
+	assert.Equal(t, expectedPKIID, msg.GetConnectionInfo().ID)
+	assert.Equal(t, api.PeerIdentityType("localhost:9610"), msg.GetConnectionInfo().Identity)
+	assert.NotNil(t, msg.GetConnectionInfo().Auth)
+	assert.True(t, msg.GetConnectionInfo().IsAuthenticated())
+	sig, _ := (&naiveSecProvider{}).Sign(msg.GetConnectionInfo().Auth.SignedData)
+	assert.Equal(t, sig, msg.GetConnectionInfo().Auth.Signature)
 	// negative path, nothing should be read from the channel because the signature is wrong
 	mutateSig := func(b []byte) []byte {
 		if b[0] == 0 {
@@ -186,7 +226,7 @@ func TestHandshake(t *testing.T) {
 		}
 		return b
 	}
-	acceptChan = handshaker("localhost:9612", comm, t, mutateSig, nil)
+	acceptChan = handshaker("localhost:9612", comm, t, mutateSig, nil, true)
 	time.Sleep(time.Second)
 	assert.Equal(t, 0, len(acceptChan))
 
@@ -194,9 +234,28 @@ func TestHandshake(t *testing.T) {
 	mutatePKIID := func(b []byte) []byte {
 		return []byte("localhost:9650")
 	}
-	acceptChan = handshaker("localhost:9613", comm, t, nil, mutatePKIID)
+	acceptChan = handshaker("localhost:9613", comm, t, nil, mutatePKIID, true)
 	time.Sleep(time.Second)
 	assert.Equal(t, 0, len(acceptChan))
+
+	// Now we test for a handshake without mutual TLS
+	// The first time should fail
+	acceptChan = handshaker("localhost:9614", comm, t, nil, nil, false)
+	select {
+	case <-acceptChan:
+		assert.Fail(t, "Should not have successfully authenticated to remote peer")
+	case <-time.After(time.Second):
+	}
+
+	// And the second time should succeed
+	comm.(*commImpl).skipHandshake = true
+	acceptChan = handshaker("localhost:9615", comm, t, nil, nil, false)
+	select {
+	case <-acceptChan:
+	case <-time.After(time.Second * 10):
+		assert.Fail(t, "skipHandshake flag should have authorized the authentication")
+	}
+
 }
 
 func TestBasic(t *testing.T) {
@@ -220,7 +279,7 @@ func TestBasic(t *testing.T) {
 	waitForMessages(t, out, 2, "Didn't receive 2 messages")
 }
 
-func TestGetPKIID(t *testing.T) {
+func TestGetConnectionInfo(t *testing.T) {
 	t.Parallel()
 	comm1, _ := newCommInstance(6000, naiveSec)
 	comm2, _ := newCommInstance(7000, naiveSec)
@@ -232,7 +291,7 @@ func TestGetPKIID(t *testing.T) {
 	case <-time.After(time.Second * 10):
 		t.Fatal("Didn't receive a message in time")
 	case msg := <-m1:
-		assert.Equal(t, comm2.GetPKIid(), msg.GetPKIID())
+		assert.Equal(t, comm2.GetPKIid(), msg.GetConnectionInfo().ID)
 	}
 }
 
@@ -347,17 +406,13 @@ func TestResponses(t *testing.T) {
 	defer comm1.Stop()
 	defer comm2.Stop()
 
-	nonceIncrememter := func(msg proto.ReceivedMessage) proto.ReceivedMessage {
-		msg.GetGossipMessage().Nonce++
-		return msg
-	}
-
 	msg := createGossipMsg()
 	go func() {
 		inChan := comm1.Accept(acceptAll)
 		for m := range inChan {
-			m = nonceIncrememter(m)
-			m.Respond(m.GetGossipMessage())
+			reply := createGossipMsg()
+			reply.Nonce = m.GetGossipMessage().Nonce + 1
+			m.Respond(reply.GossipMessage)
 		}
 	}()
 	expectedNOnce := uint64(msg.Nonce + 1)
@@ -481,15 +536,38 @@ func TestProbe(t *testing.T) {
 	comm2, _ := newCommInstance(6612, naiveSec)
 	time.Sleep(time.Duration(1) * time.Second)
 	assert.NoError(t, comm1.Probe(remotePeer(6612)))
+	_, err := comm1.Handshake(remotePeer(6612))
+	assert.NoError(t, err)
 	assert.Error(t, comm1.Probe(remotePeer(9012)))
+	_, err = comm1.Handshake(remotePeer(9012))
+	assert.Error(t, err)
 	comm2.Stop()
 	time.Sleep(time.Second)
 	assert.Error(t, comm1.Probe(remotePeer(6612)))
+	_, err = comm1.Handshake(remotePeer(6612))
+	assert.Error(t, err)
 	comm2, _ = newCommInstance(6612, naiveSec)
 	defer comm2.Stop()
 	time.Sleep(time.Duration(1) * time.Second)
 	assert.NoError(t, comm2.Probe(remotePeer(6611)))
+	_, err = comm2.Handshake(remotePeer(6611))
+	assert.NoError(t, err)
 	assert.NoError(t, comm1.Probe(remotePeer(6612)))
+	_, err = comm1.Handshake(remotePeer(6612))
+	assert.NoError(t, err)
+	// Now try a deep probe with an expected PKI-ID that doesn't match
+	wrongRemotePeer := remotePeer(6612)
+	if wrongRemotePeer.PKIID[0] == 0 {
+		wrongRemotePeer.PKIID[0] = 1
+	} else {
+		wrongRemotePeer.PKIID[0] = 0
+	}
+	_, err = comm1.Handshake(wrongRemotePeer)
+	assert.Error(t, err)
+	// Try a deep probe with a nil PKI-ID
+	id, err := comm1.Handshake(&RemotePeer{Endpoint: "localhost:6612"})
+	assert.NoError(t, err)
+	assert.Equal(t, api.PeerIdentityType("localhost:6612"), id)
 }
 
 func TestPresumedDead(t *testing.T) {
@@ -517,14 +595,14 @@ func TestPresumedDead(t *testing.T) {
 	}
 }
 
-func createGossipMsg() *proto.GossipMessage {
-	return &proto.GossipMessage{
+func createGossipMsg() *proto.SignedGossipMessage {
+	return (&proto.GossipMessage{
 		Tag:   proto.GossipMessage_EMPTY,
 		Nonce: uint64(rand.Int()),
 		Content: &proto.GossipMessage_DataMsg{
 			DataMsg: &proto.DataMessage{},
 		},
-	}
+	}).NoopSign()
 }
 
 func remotePeer(port int) *RemotePeer {

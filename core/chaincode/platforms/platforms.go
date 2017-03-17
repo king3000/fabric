@@ -27,6 +27,7 @@ import (
 
 	"io/ioutil"
 
+	"github.com/hyperledger/fabric/common/metadata"
 	"github.com/hyperledger/fabric/core/chaincode/platforms/car"
 	"github.com/hyperledger/fabric/core/chaincode/platforms/golang"
 	"github.com/hyperledger/fabric/core/chaincode/platforms/java"
@@ -74,17 +75,22 @@ func GetDeploymentPayload(spec *pb.ChaincodeSpec) ([]byte, error) {
 }
 
 func getPeerTLSCert() ([]byte, error) {
-	path := viper.GetString("peer.tls.cert.file")
+
+	if viper.GetBool("peer.tls.enabled") == false {
+		// no need for certificates if TLS is not enabled
+		return nil, nil
+	}
+	var path string
+	// first we check for the rootcert
+	path = viper.GetString("peer.tls.rootcert.file")
+	if path == "" {
+		// check for tls cert
+		path = viper.GetString("peer.tls.cert.file")
+	}
+	// this should not happen if the peer is running with TLS enabled
 	if _, err := os.Stat(path); err != nil {
-
-		if os.IsNotExist(err) && viper.GetBool("peer.tls.enabled") == false {
-			// It's not an error if the file doesn't exist but TLS is disabled anyway
-			return nil, nil
-		}
-
 		return nil, err
 	}
-
 	// FIXME: FAB-2037 - ensure we sanely resolve relative paths specified in the yaml
 	return ioutil.ReadFile(path)
 }
@@ -104,12 +110,21 @@ func generateDockerfile(platform Platform, cds *pb.ChaincodeDeploymentSpec, tls 
 	buf = append(buf, base)
 
 	// ----------------------------------------------------------------------------------------------------
+	// Add some handy labels
+	// ----------------------------------------------------------------------------------------------------
+	buf = append(buf, fmt.Sprintf("LABEL %s.chaincode.id.name=\"%s\" \\", metadata.BaseDockerLabel, cds.ChaincodeSpec.ChaincodeId.Name))
+	buf = append(buf, fmt.Sprintf("      %s.chaincode.id.version=\"%s\" \\", metadata.BaseDockerLabel, cds.ChaincodeSpec.ChaincodeId.Version))
+	buf = append(buf, fmt.Sprintf("      %s.chaincode.type=\"%s\" \\", metadata.BaseDockerLabel, cds.ChaincodeSpec.Type.String()))
+	buf = append(buf, fmt.Sprintf("      %s.version=\"%s\" \\", metadata.BaseDockerLabel, metadata.Version))
+	buf = append(buf, fmt.Sprintf("      %s.base.version=\"%s\"", metadata.BaseDockerLabel, metadata.BaseVersion))
+
+	// ----------------------------------------------------------------------------------------------------
 	// Then augment it with any general options
 	// ----------------------------------------------------------------------------------------------------
 	if tls {
 		const guestTLSPath = "/etc/hyperledger/fabric/peer.crt"
 
-		buf = append(buf, "ENV CORE_PEER_TLS_CERT_FILE="+guestTLSPath)
+		buf = append(buf, "ENV CORE_PEER_TLS_ROOTCERT_FILE="+guestTLSPath)
 		buf = append(buf, "COPY peer.crt "+guestTLSPath)
 	}
 
@@ -117,6 +132,7 @@ func generateDockerfile(platform Platform, cds *pb.ChaincodeDeploymentSpec, tls 
 	// Finalize it
 	// ----------------------------------------------------------------------------------------------------
 	contents := strings.Join(buf, "\n")
+	logger.Debugf("\n%s", contents)
 
 	return []byte(contents), nil
 }

@@ -17,6 +17,7 @@ limitations under the License.
 package mock
 
 import (
+	"github.com/hyperledger/fabric/gossip/api"
 	"github.com/hyperledger/fabric/gossip/comm"
 	"github.com/hyperledger/fabric/gossip/common"
 	"github.com/hyperledger/fabric/gossip/util"
@@ -87,24 +88,24 @@ func (packet *packetMock) Respond(msg *proto.GossipMessage) {
 	packet.src.socket <- &packetMock{
 		src: packet.dst,
 		dst: packet.src,
-		msg: msg,
+		msg: msg.NoopSign(),
 	}
 }
 
-// GetSourceMessage Returns the SignedGossipMessage the ReceivedMessage was
+// GetSourceEnvelope Returns the Envelope the ReceivedMessage was
 // constructed with
-func (packet *packetMock) GetSourceMessage() *proto.SignedGossipMessage {
+func (packet *packetMock) GetSourceEnvelope() *proto.Envelope {
 	return nil
 }
 
 // GetGossipMessage returns the underlying GossipMessage
-func (packet *packetMock) GetGossipMessage() *proto.GossipMessage {
-	return packet.msg.(*proto.GossipMessage)
+func (packet *packetMock) GetGossipMessage() *proto.SignedGossipMessage {
+	return packet.msg.(*proto.SignedGossipMessage)
 }
 
-// GetPKIID returns the PKI-ID of the remote peer
+// GetConnectionInfo returns information about the remote peer
 // that sent the message
-func (packet *packetMock) GetPKIID() common.PKIidType {
+func (packet *packetMock) GetConnectionInfo() *proto.ConnectionInfo {
 	return nil
 }
 
@@ -141,7 +142,7 @@ func (mock *commMock) GetPKIid() common.PKIidType {
 }
 
 // Send sends a message to remote peers
-func (mock *commMock) Send(msg *proto.GossipMessage, peers ...*comm.RemotePeer) {
+func (mock *commMock) Send(msg *proto.SignedGossipMessage, peers ...*comm.RemotePeer) {
 	for _, peer := range peers {
 		logger.Debug("Sending message to peer ", peer.Endpoint, "from ", mock.id)
 		mock.members[peer.Endpoint].socket <- &packetMock{
@@ -152,9 +153,16 @@ func (mock *commMock) Send(msg *proto.GossipMessage, peers ...*comm.RemotePeer) 
 	}
 }
 
-// Probe probes a remote node and returns nil if its responsive
+// Probe probes a remote node and returns nil if its responsive,
+// and an error if it's not.
 func (mock *commMock) Probe(peer *comm.RemotePeer) error {
 	return nil
+}
+
+// Handshake authenticates a remote peer and returns
+// (its identity, nil) on success and (nil, error)
+func (mock *commMock) Handshake(peer *comm.RemotePeer) (api.PeerIdentityType, error) {
+	return nil, nil
 }
 
 // Accept returns a dedicated read-only channel for messages sent by other nodes that match a certain predicate.

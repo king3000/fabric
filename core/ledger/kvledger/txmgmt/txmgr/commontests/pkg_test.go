@@ -113,7 +113,8 @@ func (env *couchDBLockBasedEnv) getName() string {
 
 func (env *couchDBLockBasedEnv) init(t *testing.T) {
 	viper.Set("peer.fileSystemPath", testFilesystemPath)
-	viper.Set("ledger.state.couchDBConfig.couchDBAddress", "127.0.0.1:5984")
+	// both vagrant and CI have couchdb configured at host "couchdb"
+	viper.Set("ledger.state.couchDBConfig.couchDBAddress", "couchdb:5984")
 	testDBEnv := statecouchdb.NewTestVDBEnv(t)
 	testDB, err := testDBEnv.DBProvider.GetDBHandle(couchTestChainID)
 	testutil.AssertNoError(t, err, "")
@@ -153,10 +154,10 @@ func (h *txMgrTestHelper) validateAndCommitRWSet(txRWSet []byte) {
 	block := h.bg.NextBlock([][]byte{txRWSet}, false)
 	err := h.txMgr.ValidateAndPrepare(block, true)
 	testutil.AssertNoError(h.t, err, "")
-	txsFltr := util.NewFilterBitArrayFromBytes(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	txsFltr := util.TxValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 	invalidTxNum := 0
 	for i := 0; i < len(block.Data.Data); i++ {
-		if txsFltr.IsSet(uint(i)) {
+		if txsFltr.IsInvalid(i) {
 			invalidTxNum++
 		}
 	}
@@ -169,10 +170,10 @@ func (h *txMgrTestHelper) checkRWsetInvalid(txRWSet []byte) {
 	block := h.bg.NextBlock([][]byte{txRWSet}, false)
 	err := h.txMgr.ValidateAndPrepare(block, true)
 	testutil.AssertNoError(h.t, err, "")
-	txsFltr := util.NewFilterBitArrayFromBytes(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
+	txsFltr := util.TxValidationFlags(block.Metadata.Metadata[common.BlockMetadataIndex_TRANSACTIONS_FILTER])
 	invalidTxNum := 0
 	for i := 0; i < len(block.Data.Data); i++ {
-		if txsFltr.IsSet(uint(i)) {
+		if txsFltr.IsInvalid(i) {
 			invalidTxNum++
 		}
 	}

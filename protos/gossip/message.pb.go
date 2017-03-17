@@ -9,7 +9,9 @@ It is generated from these files:
 	gossip/message.proto
 
 It has these top-level messages:
-	SignedGossipMessage
+	Envelope
+	SecretEnvelope
+	Secret
 	GossipMessage
 	StateInfo
 	StateInfoSnapshot
@@ -28,7 +30,6 @@ It has these top-level messages:
 	MembershipRequest
 	MembershipResponse
 	Member
-	SignedEndpoint
 	Empty
 	RemoteStateRequest
 	RemoteStateResponse
@@ -58,20 +59,20 @@ const _ = proto.ProtoPackageIsVersion2 // please upgrade the proto package
 type PullMsgType int32
 
 const (
-	PullMsgType_Undefined    PullMsgType = 0
-	PullMsgType_BlockMessage PullMsgType = 1
-	PullMsgType_IdentityMsg  PullMsgType = 2
+	PullMsgType_UNDEFINED    PullMsgType = 0
+	PullMsgType_BLOCK_MSG    PullMsgType = 1
+	PullMsgType_IDENTITY_MSG PullMsgType = 2
 )
 
 var PullMsgType_name = map[int32]string{
-	0: "Undefined",
-	1: "BlockMessage",
-	2: "IdentityMsg",
+	0: "UNDEFINED",
+	1: "BLOCK_MSG",
+	2: "IDENTITY_MSG",
 }
 var PullMsgType_value = map[string]int32{
-	"Undefined":    0,
-	"BlockMessage": 1,
-	"IdentityMsg":  2,
+	"UNDEFINED":    0,
+	"BLOCK_MSG":    1,
+	"IDENTITY_MSG": 2,
 }
 
 func (x PullMsgType) String() string {
@@ -110,19 +111,133 @@ var GossipMessage_Tag_value = map[string]int32{
 func (x GossipMessage_Tag) String() string {
 	return proto.EnumName(GossipMessage_Tag_name, int32(x))
 }
-func (GossipMessage_Tag) EnumDescriptor() ([]byte, []int) { return fileDescriptor0, []int{1, 0} }
+func (GossipMessage_Tag) EnumDescriptor() ([]byte, []int) { return fileDescriptor0, []int{3, 0} }
 
-// GossipMessage contains a marshalled
+// Envelope contains a marshalled
 // GossipMessage and a signature over it.
-type SignedGossipMessage struct {
+// It may also contain a SecretEnvelope
+// which is a marshalled Secret
+type Envelope struct {
+	Payload        []byte          `protobuf:"bytes,1,opt,name=payload,proto3" json:"payload,omitempty"`
+	Signature      []byte          `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
+	SecretEnvelope *SecretEnvelope `protobuf:"bytes,3,opt,name=secretEnvelope" json:"secretEnvelope,omitempty"`
+}
+
+func (m *Envelope) Reset()                    { *m = Envelope{} }
+func (m *Envelope) String() string            { return proto.CompactTextString(m) }
+func (*Envelope) ProtoMessage()               {}
+func (*Envelope) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{0} }
+
+func (m *Envelope) GetSecretEnvelope() *SecretEnvelope {
+	if m != nil {
+		return m.SecretEnvelope
+	}
+	return nil
+}
+
+// SecretEnvelope is a marshalled Secret
+// and a signature over it.
+// The signature should be validated by the peer
+// that signed the Envelope the SecretEnvelope
+// came with
+type SecretEnvelope struct {
 	Payload   []byte `protobuf:"bytes,1,opt,name=payload,proto3" json:"payload,omitempty"`
 	Signature []byte `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
 }
 
-func (m *SignedGossipMessage) Reset()                    { *m = SignedGossipMessage{} }
-func (m *SignedGossipMessage) String() string            { return proto.CompactTextString(m) }
-func (*SignedGossipMessage) ProtoMessage()               {}
-func (*SignedGossipMessage) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{0} }
+func (m *SecretEnvelope) Reset()                    { *m = SecretEnvelope{} }
+func (m *SecretEnvelope) String() string            { return proto.CompactTextString(m) }
+func (*SecretEnvelope) ProtoMessage()               {}
+func (*SecretEnvelope) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{1} }
+
+// Secret is an entity that might be omitted
+// from an Envelope when the remote peer that is receiving
+// the Envelope shouldn't know the secret's content.
+type Secret struct {
+	// Types that are valid to be assigned to Content:
+	//	*Secret_InternalEndpoint
+	Content isSecret_Content `protobuf_oneof:"content"`
+}
+
+func (m *Secret) Reset()                    { *m = Secret{} }
+func (m *Secret) String() string            { return proto.CompactTextString(m) }
+func (*Secret) ProtoMessage()               {}
+func (*Secret) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{2} }
+
+type isSecret_Content interface {
+	isSecret_Content()
+}
+
+type Secret_InternalEndpoint struct {
+	InternalEndpoint string `protobuf:"bytes,1,opt,name=internalEndpoint,oneof"`
+}
+
+func (*Secret_InternalEndpoint) isSecret_Content() {}
+
+func (m *Secret) GetContent() isSecret_Content {
+	if m != nil {
+		return m.Content
+	}
+	return nil
+}
+
+func (m *Secret) GetInternalEndpoint() string {
+	if x, ok := m.GetContent().(*Secret_InternalEndpoint); ok {
+		return x.InternalEndpoint
+	}
+	return ""
+}
+
+// XXX_OneofFuncs is for the internal use of the proto package.
+func (*Secret) XXX_OneofFuncs() (func(msg proto.Message, b *proto.Buffer) error, func(msg proto.Message, tag, wire int, b *proto.Buffer) (bool, error), func(msg proto.Message) (n int), []interface{}) {
+	return _Secret_OneofMarshaler, _Secret_OneofUnmarshaler, _Secret_OneofSizer, []interface{}{
+		(*Secret_InternalEndpoint)(nil),
+	}
+}
+
+func _Secret_OneofMarshaler(msg proto.Message, b *proto.Buffer) error {
+	m := msg.(*Secret)
+	// content
+	switch x := m.Content.(type) {
+	case *Secret_InternalEndpoint:
+		b.EncodeVarint(1<<3 | proto.WireBytes)
+		b.EncodeStringBytes(x.InternalEndpoint)
+	case nil:
+	default:
+		return fmt.Errorf("Secret.Content has unexpected type %T", x)
+	}
+	return nil
+}
+
+func _Secret_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.Buffer) (bool, error) {
+	m := msg.(*Secret)
+	switch tag {
+	case 1: // content.internalEndpoint
+		if wire != proto.WireBytes {
+			return true, proto.ErrInternalBadWireType
+		}
+		x, err := b.DecodeStringBytes()
+		m.Content = &Secret_InternalEndpoint{x}
+		return true, err
+	default:
+		return false, nil
+	}
+}
+
+func _Secret_OneofSizer(msg proto.Message) (n int) {
+	m := msg.(*Secret)
+	// content
+	switch x := m.Content.(type) {
+	case *Secret_InternalEndpoint:
+		n += proto.SizeVarint(1<<3 | proto.WireBytes)
+		n += proto.SizeVarint(uint64(len(x.InternalEndpoint)))
+		n += len(x.InternalEndpoint)
+	case nil:
+	default:
+		panic(fmt.Sprintf("proto: unexpected type %T in oneof", x))
+	}
+	return n
+}
 
 // GossipMessage defines the message sent in a gossip network
 type GossipMessage struct {
@@ -135,8 +250,7 @@ type GossipMessage struct {
 	Channel []byte `protobuf:"bytes,2,opt,name=channel,proto3" json:"channel,omitempty"`
 	// determines to which peers it is allowed
 	// to forward the message
-	Tag       GossipMessage_Tag `protobuf:"varint,3,opt,name=tag,enum=gossip.GossipMessage_Tag" json:"tag,omitempty"`
-	Signature []byte            `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
+	Tag GossipMessage_Tag `protobuf:"varint,3,opt,name=tag,enum=gossip.GossipMessage_Tag" json:"tag,omitempty"`
 	// Types that are valid to be assigned to Content:
 	//	*GossipMessage_AliveMsg
 	//	*GossipMessage_MemReq
@@ -161,35 +275,35 @@ type GossipMessage struct {
 func (m *GossipMessage) Reset()                    { *m = GossipMessage{} }
 func (m *GossipMessage) String() string            { return proto.CompactTextString(m) }
 func (*GossipMessage) ProtoMessage()               {}
-func (*GossipMessage) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{1} }
+func (*GossipMessage) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{3} }
 
 type isGossipMessage_Content interface {
 	isGossipMessage_Content()
 }
 
 type GossipMessage_AliveMsg struct {
-	AliveMsg *AliveMessage `protobuf:"bytes,5,opt,name=aliveMsg,oneof"`
+	AliveMsg *AliveMessage `protobuf:"bytes,5,opt,name=alive_msg,json=aliveMsg,oneof"`
 }
 type GossipMessage_MemReq struct {
-	MemReq *MembershipRequest `protobuf:"bytes,6,opt,name=memReq,oneof"`
+	MemReq *MembershipRequest `protobuf:"bytes,6,opt,name=mem_req,json=memReq,oneof"`
 }
 type GossipMessage_MemRes struct {
-	MemRes *MembershipResponse `protobuf:"bytes,7,opt,name=memRes,oneof"`
+	MemRes *MembershipResponse `protobuf:"bytes,7,opt,name=mem_res,json=memRes,oneof"`
 }
 type GossipMessage_DataMsg struct {
-	DataMsg *DataMessage `protobuf:"bytes,8,opt,name=dataMsg,oneof"`
+	DataMsg *DataMessage `protobuf:"bytes,8,opt,name=data_msg,json=dataMsg,oneof"`
 }
 type GossipMessage_Hello struct {
 	Hello *GossipHello `protobuf:"bytes,9,opt,name=hello,oneof"`
 }
 type GossipMessage_DataDig struct {
-	DataDig *DataDigest `protobuf:"bytes,10,opt,name=dataDig,oneof"`
+	DataDig *DataDigest `protobuf:"bytes,10,opt,name=data_dig,json=dataDig,oneof"`
 }
 type GossipMessage_DataReq struct {
-	DataReq *DataRequest `protobuf:"bytes,11,opt,name=dataReq,oneof"`
+	DataReq *DataRequest `protobuf:"bytes,11,opt,name=data_req,json=dataReq,oneof"`
 }
 type GossipMessage_DataUpdate struct {
-	DataUpdate *DataUpdate `protobuf:"bytes,12,opt,name=dataUpdate,oneof"`
+	DataUpdate *DataUpdate `protobuf:"bytes,12,opt,name=data_update,json=dataUpdate,oneof"`
 }
 type GossipMessage_Empty struct {
 	Empty *Empty `protobuf:"bytes,13,opt,name=empty,oneof"`
@@ -198,25 +312,25 @@ type GossipMessage_Conn struct {
 	Conn *ConnEstablish `protobuf:"bytes,14,opt,name=conn,oneof"`
 }
 type GossipMessage_StateInfo struct {
-	StateInfo *StateInfo `protobuf:"bytes,15,opt,name=stateInfo,oneof"`
+	StateInfo *StateInfo `protobuf:"bytes,15,opt,name=state_info,json=stateInfo,oneof"`
 }
 type GossipMessage_StateSnapshot struct {
-	StateSnapshot *StateInfoSnapshot `protobuf:"bytes,16,opt,name=stateSnapshot,oneof"`
+	StateSnapshot *StateInfoSnapshot `protobuf:"bytes,16,opt,name=state_snapshot,json=stateSnapshot,oneof"`
 }
 type GossipMessage_StateInfoPullReq struct {
-	StateInfoPullReq *StateInfoPullRequest `protobuf:"bytes,17,opt,name=stateInfoPullReq,oneof"`
+	StateInfoPullReq *StateInfoPullRequest `protobuf:"bytes,17,opt,name=state_info_pull_req,json=stateInfoPullReq,oneof"`
 }
 type GossipMessage_StateRequest struct {
-	StateRequest *RemoteStateRequest `protobuf:"bytes,18,opt,name=stateRequest,oneof"`
+	StateRequest *RemoteStateRequest `protobuf:"bytes,18,opt,name=state_request,json=stateRequest,oneof"`
 }
 type GossipMessage_StateResponse struct {
-	StateResponse *RemoteStateResponse `protobuf:"bytes,19,opt,name=stateResponse,oneof"`
+	StateResponse *RemoteStateResponse `protobuf:"bytes,19,opt,name=state_response,json=stateResponse,oneof"`
 }
 type GossipMessage_LeadershipMsg struct {
-	LeadershipMsg *LeadershipMessage `protobuf:"bytes,20,opt,name=leadershipMsg,oneof"`
+	LeadershipMsg *LeadershipMessage `protobuf:"bytes,20,opt,name=leadership_msg,json=leadershipMsg,oneof"`
 }
 type GossipMessage_PeerIdentity struct {
-	PeerIdentity *PeerIdentity `protobuf:"bytes,21,opt,name=peerIdentity,oneof"`
+	PeerIdentity *PeerIdentity `protobuf:"bytes,21,opt,name=peer_identity,json=peerIdentity,oneof"`
 }
 
 func (*GossipMessage_AliveMsg) isGossipMessage_Content()         {}
@@ -485,7 +599,7 @@ func _GossipMessage_OneofMarshaler(msg proto.Message, b *proto.Buffer) error {
 func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.Buffer) (bool, error) {
 	m := msg.(*GossipMessage)
 	switch tag {
-	case 5: // content.aliveMsg
+	case 5: // content.alive_msg
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -493,7 +607,7 @@ func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.
 		err := b.DecodeMessage(msg)
 		m.Content = &GossipMessage_AliveMsg{msg}
 		return true, err
-	case 6: // content.memReq
+	case 6: // content.mem_req
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -501,7 +615,7 @@ func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.
 		err := b.DecodeMessage(msg)
 		m.Content = &GossipMessage_MemReq{msg}
 		return true, err
-	case 7: // content.memRes
+	case 7: // content.mem_res
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -509,7 +623,7 @@ func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.
 		err := b.DecodeMessage(msg)
 		m.Content = &GossipMessage_MemRes{msg}
 		return true, err
-	case 8: // content.dataMsg
+	case 8: // content.data_msg
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -525,7 +639,7 @@ func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.
 		err := b.DecodeMessage(msg)
 		m.Content = &GossipMessage_Hello{msg}
 		return true, err
-	case 10: // content.dataDig
+	case 10: // content.data_dig
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -533,7 +647,7 @@ func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.
 		err := b.DecodeMessage(msg)
 		m.Content = &GossipMessage_DataDig{msg}
 		return true, err
-	case 11: // content.dataReq
+	case 11: // content.data_req
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -541,7 +655,7 @@ func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.
 		err := b.DecodeMessage(msg)
 		m.Content = &GossipMessage_DataReq{msg}
 		return true, err
-	case 12: // content.dataUpdate
+	case 12: // content.data_update
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -565,7 +679,7 @@ func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.
 		err := b.DecodeMessage(msg)
 		m.Content = &GossipMessage_Conn{msg}
 		return true, err
-	case 15: // content.stateInfo
+	case 15: // content.state_info
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -573,7 +687,7 @@ func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.
 		err := b.DecodeMessage(msg)
 		m.Content = &GossipMessage_StateInfo{msg}
 		return true, err
-	case 16: // content.stateSnapshot
+	case 16: // content.state_snapshot
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -581,7 +695,7 @@ func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.
 		err := b.DecodeMessage(msg)
 		m.Content = &GossipMessage_StateSnapshot{msg}
 		return true, err
-	case 17: // content.stateInfoPullReq
+	case 17: // content.state_info_pull_req
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -589,7 +703,7 @@ func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.
 		err := b.DecodeMessage(msg)
 		m.Content = &GossipMessage_StateInfoPullReq{msg}
 		return true, err
-	case 18: // content.stateRequest
+	case 18: // content.state_request
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -597,7 +711,7 @@ func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.
 		err := b.DecodeMessage(msg)
 		m.Content = &GossipMessage_StateRequest{msg}
 		return true, err
-	case 19: // content.stateResponse
+	case 19: // content.state_response
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -605,7 +719,7 @@ func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.
 		err := b.DecodeMessage(msg)
 		m.Content = &GossipMessage_StateResponse{msg}
 		return true, err
-	case 20: // content.leadershipMsg
+	case 20: // content.leadership_msg
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -613,7 +727,7 @@ func _GossipMessage_OneofUnmarshaler(msg proto.Message, tag, wire int, b *proto.
 		err := b.DecodeMessage(msg)
 		m.Content = &GossipMessage_LeadershipMsg{msg}
 		return true, err
-	case 21: // content.peerIdentity
+	case 21: // content.peer_identity
 		if wire != proto.WireBytes {
 			return true, proto.ErrInternalBadWireType
 		}
@@ -727,13 +841,13 @@ func _GossipMessage_OneofSizer(msg proto.Message) (n int) {
 type StateInfo struct {
 	Metadata  []byte    `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	Timestamp *PeerTime `protobuf:"bytes,2,opt,name=timestamp" json:"timestamp,omitempty"`
-	PkiID     []byte    `protobuf:"bytes,3,opt,name=pkiID,proto3" json:"pkiID,omitempty"`
+	PkiId     []byte    `protobuf:"bytes,3,opt,name=pki_id,json=pkiId,proto3" json:"pki_id,omitempty"`
 }
 
 func (m *StateInfo) Reset()                    { *m = StateInfo{} }
 func (m *StateInfo) String() string            { return proto.CompactTextString(m) }
 func (*StateInfo) ProtoMessage()               {}
-func (*StateInfo) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{2} }
+func (*StateInfo) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{4} }
 
 func (m *StateInfo) GetTimestamp() *PeerTime {
 	if m != nil {
@@ -744,15 +858,15 @@ func (m *StateInfo) GetTimestamp() *PeerTime {
 
 // StateInfoSnapshot is an aggregation of StateInfo messages
 type StateInfoSnapshot struct {
-	Elements []*GossipMessage `protobuf:"bytes,1,rep,name=elements" json:"elements,omitempty"`
+	Elements []*Envelope `protobuf:"bytes,1,rep,name=elements" json:"elements,omitempty"`
 }
 
 func (m *StateInfoSnapshot) Reset()                    { *m = StateInfoSnapshot{} }
 func (m *StateInfoSnapshot) String() string            { return proto.CompactTextString(m) }
 func (*StateInfoSnapshot) ProtoMessage()               {}
-func (*StateInfoSnapshot) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{3} }
+func (*StateInfoSnapshot) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{5} }
 
-func (m *StateInfoSnapshot) GetElements() []*GossipMessage {
+func (m *StateInfoSnapshot) GetElements() []*Envelope {
 	if m != nil {
 		return m.Elements
 	}
@@ -767,13 +881,13 @@ type StateInfoPullRequest struct {
 func (m *StateInfoPullRequest) Reset()                    { *m = StateInfoPullRequest{} }
 func (m *StateInfoPullRequest) String() string            { return proto.CompactTextString(m) }
 func (*StateInfoPullRequest) ProtoMessage()               {}
-func (*StateInfoPullRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{4} }
+func (*StateInfoPullRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{6} }
 
 // ConnEstablish is the message used for the gossip handshake
 // Whenever a peer connects to another peer, it handshakes
 // with it by sending this message that proves its identity
 type ConnEstablish struct {
-	PkiID []byte `protobuf:"bytes,1,opt,name=pkiID,proto3" json:"pkiID,omitempty"`
+	PkiId []byte `protobuf:"bytes,1,opt,name=pki_id,json=pkiId,proto3" json:"pki_id,omitempty"`
 	Cert  []byte `protobuf:"bytes,2,opt,name=cert,proto3" json:"cert,omitempty"`
 	Hash  []byte `protobuf:"bytes,3,opt,name=hash,proto3" json:"hash,omitempty"`
 }
@@ -781,13 +895,13 @@ type ConnEstablish struct {
 func (m *ConnEstablish) Reset()                    { *m = ConnEstablish{} }
 func (m *ConnEstablish) String() string            { return proto.CompactTextString(m) }
 func (*ConnEstablish) ProtoMessage()               {}
-func (*ConnEstablish) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{5} }
+func (*ConnEstablish) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{7} }
 
 // PeerIdentity defines the identity of the peer
 // Used to make other peers learn of the identity
 // of a certain peer
 type PeerIdentity struct {
-	PkiID    []byte `protobuf:"bytes,1,opt,name=pkiID,proto3" json:"pkiID,omitempty"`
+	PkiId    []byte `protobuf:"bytes,1,opt,name=pki_id,json=pkiId,proto3" json:"pki_id,omitempty"`
 	Cert     []byte `protobuf:"bytes,2,opt,name=cert,proto3" json:"cert,omitempty"`
 	Metadata []byte `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"`
 }
@@ -795,48 +909,48 @@ type PeerIdentity struct {
 func (m *PeerIdentity) Reset()                    { *m = PeerIdentity{} }
 func (m *PeerIdentity) String() string            { return proto.CompactTextString(m) }
 func (*PeerIdentity) ProtoMessage()               {}
-func (*PeerIdentity) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{6} }
+func (*PeerIdentity) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{8} }
 
 // DataRequest is a message used for a peer to request
 // certain data blocks from a remote peer
 type DataRequest struct {
 	Nonce   uint64      `protobuf:"varint,1,opt,name=nonce" json:"nonce,omitempty"`
 	Digests []string    `protobuf:"bytes,2,rep,name=digests" json:"digests,omitempty"`
-	MsgType PullMsgType `protobuf:"varint,3,opt,name=msgType,enum=gossip.PullMsgType" json:"msgType,omitempty"`
+	MsgType PullMsgType `protobuf:"varint,3,opt,name=msg_type,json=msgType,enum=gossip.PullMsgType" json:"msg_type,omitempty"`
 }
 
 func (m *DataRequest) Reset()                    { *m = DataRequest{} }
 func (m *DataRequest) String() string            { return proto.CompactTextString(m) }
 func (*DataRequest) ProtoMessage()               {}
-func (*DataRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{7} }
+func (*DataRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{9} }
 
 // GossipHello is the message that is used for the peer to initiate
 // a pull round with another peer
 type GossipHello struct {
 	Nonce    uint64      `protobuf:"varint,1,opt,name=nonce" json:"nonce,omitempty"`
 	Metadata []byte      `protobuf:"bytes,2,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	MsgType  PullMsgType `protobuf:"varint,3,opt,name=msgType,enum=gossip.PullMsgType" json:"msgType,omitempty"`
+	MsgType  PullMsgType `protobuf:"varint,3,opt,name=msg_type,json=msgType,enum=gossip.PullMsgType" json:"msg_type,omitempty"`
 }
 
 func (m *GossipHello) Reset()                    { *m = GossipHello{} }
 func (m *GossipHello) String() string            { return proto.CompactTextString(m) }
 func (*GossipHello) ProtoMessage()               {}
-func (*GossipHello) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{8} }
+func (*GossipHello) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{10} }
 
 // DataUpdate is the the final message in the pull phase
 // sent from the receiver to the initiator
 type DataUpdate struct {
-	Nonce   uint64           `protobuf:"varint,1,opt,name=nonce" json:"nonce,omitempty"`
-	Data    []*GossipMessage `protobuf:"bytes,2,rep,name=data" json:"data,omitempty"`
-	MsgType PullMsgType      `protobuf:"varint,3,opt,name=msgType,enum=gossip.PullMsgType" json:"msgType,omitempty"`
+	Nonce   uint64      `protobuf:"varint,1,opt,name=nonce" json:"nonce,omitempty"`
+	Data    []*Envelope `protobuf:"bytes,2,rep,name=data" json:"data,omitempty"`
+	MsgType PullMsgType `protobuf:"varint,3,opt,name=msg_type,json=msgType,enum=gossip.PullMsgType" json:"msg_type,omitempty"`
 }
 
 func (m *DataUpdate) Reset()                    { *m = DataUpdate{} }
 func (m *DataUpdate) String() string            { return proto.CompactTextString(m) }
 func (*DataUpdate) ProtoMessage()               {}
-func (*DataUpdate) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{9} }
+func (*DataUpdate) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{11} }
 
-func (m *DataUpdate) GetData() []*GossipMessage {
+func (m *DataUpdate) GetData() []*Envelope {
 	if m != nil {
 		return m.Data
 	}
@@ -848,13 +962,13 @@ func (m *DataUpdate) GetData() []*GossipMessage {
 type DataDigest struct {
 	Nonce   uint64      `protobuf:"varint,1,opt,name=nonce" json:"nonce,omitempty"`
 	Digests []string    `protobuf:"bytes,2,rep,name=digests" json:"digests,omitempty"`
-	MsgType PullMsgType `protobuf:"varint,3,opt,name=msgType,enum=gossip.PullMsgType" json:"msgType,omitempty"`
+	MsgType PullMsgType `protobuf:"varint,3,opt,name=msg_type,json=msgType,enum=gossip.PullMsgType" json:"msg_type,omitempty"`
 }
 
 func (m *DataDigest) Reset()                    { *m = DataDigest{} }
 func (m *DataDigest) String() string            { return proto.CompactTextString(m) }
 func (*DataDigest) ProtoMessage()               {}
-func (*DataDigest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{10} }
+func (*DataDigest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{12} }
 
 // DataMessage is the message that contains a block
 type DataMessage struct {
@@ -864,7 +978,7 @@ type DataMessage struct {
 func (m *DataMessage) Reset()                    { *m = DataMessage{} }
 func (m *DataMessage) String() string            { return proto.CompactTextString(m) }
 func (*DataMessage) ProtoMessage()               {}
-func (*DataMessage) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{11} }
+func (*DataMessage) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{13} }
 
 func (m *DataMessage) GetPayload() *Payload {
 	if m != nil {
@@ -875,7 +989,7 @@ func (m *DataMessage) GetPayload() *Payload {
 
 // Payload contains a block
 type Payload struct {
-	SeqNum uint64 `protobuf:"varint,1,opt,name=seqNum" json:"seqNum,omitempty"`
+	SeqNum uint64 `protobuf:"varint,1,opt,name=seq_num,json=seqNum" json:"seq_num,omitempty"`
 	Hash   string `protobuf:"bytes,2,opt,name=hash" json:"hash,omitempty"`
 	Data   []byte `protobuf:"bytes,3,opt,name=data,proto3" json:"data,omitempty"`
 }
@@ -883,7 +997,7 @@ type Payload struct {
 func (m *Payload) Reset()                    { *m = Payload{} }
 func (m *Payload) String() string            { return proto.CompactTextString(m) }
 func (*Payload) ProtoMessage()               {}
-func (*Payload) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{12} }
+func (*Payload) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{14} }
 
 // AliveMessage is sent to inform remote peers
 // of a peer's existence and activity
@@ -896,7 +1010,7 @@ type AliveMessage struct {
 func (m *AliveMessage) Reset()                    { *m = AliveMessage{} }
 func (m *AliveMessage) String() string            { return proto.CompactTextString(m) }
 func (*AliveMessage) ProtoMessage()               {}
-func (*AliveMessage) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{13} }
+func (*AliveMessage) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{15} }
 
 func (m *AliveMessage) GetMembership() *Member {
 	if m != nil {
@@ -915,15 +1029,15 @@ func (m *AliveMessage) GetTimestamp() *PeerTime {
 // Leadership Message is sent during leader election to inform
 // remote peers about intent of peer to proclaim itself as leader
 type LeadershipMessage struct {
-	PkiID         []byte    `protobuf:"bytes,1,opt,name=pkiID,proto3" json:"pkiID,omitempty"`
+	PkiId         []byte    `protobuf:"bytes,1,opt,name=pki_id,json=pkiId,proto3" json:"pki_id,omitempty"`
 	Timestamp     *PeerTime `protobuf:"bytes,2,opt,name=timestamp" json:"timestamp,omitempty"`
-	IsDeclaration bool      `protobuf:"varint,3,opt,name=isDeclaration" json:"isDeclaration,omitempty"`
+	IsDeclaration bool      `protobuf:"varint,3,opt,name=is_declaration,json=isDeclaration" json:"is_declaration,omitempty"`
 }
 
 func (m *LeadershipMessage) Reset()                    { *m = LeadershipMessage{} }
 func (m *LeadershipMessage) String() string            { return proto.CompactTextString(m) }
 func (*LeadershipMessage) ProtoMessage()               {}
-func (*LeadershipMessage) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{14} }
+func (*LeadershipMessage) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{16} }
 
 func (m *LeadershipMessage) GetTimestamp() *PeerTime {
 	if m != nil {
@@ -935,27 +1049,27 @@ func (m *LeadershipMessage) GetTimestamp() *PeerTime {
 // PeerTime defines the logical time of a peer's life
 type PeerTime struct {
 	IncNumber uint64 `protobuf:"varint,1,opt,name=inc_number,json=incNumber" json:"inc_number,omitempty"`
-	SeqNum    uint64 `protobuf:"varint,2,opt,name=seqNum" json:"seqNum,omitempty"`
+	SeqNum    uint64 `protobuf:"varint,2,opt,name=seq_num,json=seqNum" json:"seq_num,omitempty"`
 }
 
 func (m *PeerTime) Reset()                    { *m = PeerTime{} }
 func (m *PeerTime) String() string            { return proto.CompactTextString(m) }
 func (*PeerTime) ProtoMessage()               {}
-func (*PeerTime) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{15} }
+func (*PeerTime) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{17} }
 
 // MembershipRequest is used to ask membership information
 // from a remote peer
 type MembershipRequest struct {
-	SelfInformation *GossipMessage `protobuf:"bytes,1,opt,name=selfInformation" json:"selfInformation,omitempty"`
-	Known           [][]byte       `protobuf:"bytes,2,rep,name=known,proto3" json:"known,omitempty"`
+	SelfInformation *Envelope `protobuf:"bytes,1,opt,name=self_information,json=selfInformation" json:"self_information,omitempty"`
+	Known           [][]byte  `protobuf:"bytes,2,rep,name=known,proto3" json:"known,omitempty"`
 }
 
 func (m *MembershipRequest) Reset()                    { *m = MembershipRequest{} }
 func (m *MembershipRequest) String() string            { return proto.CompactTextString(m) }
 func (*MembershipRequest) ProtoMessage()               {}
-func (*MembershipRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{16} }
+func (*MembershipRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{18} }
 
-func (m *MembershipRequest) GetSelfInformation() *GossipMessage {
+func (m *MembershipRequest) GetSelfInformation() *Envelope {
 	if m != nil {
 		return m.SelfInformation
 	}
@@ -964,23 +1078,23 @@ func (m *MembershipRequest) GetSelfInformation() *GossipMessage {
 
 // MembershipResponse is used for replying to MembershipRequests
 type MembershipResponse struct {
-	Alive []*GossipMessage `protobuf:"bytes,1,rep,name=alive" json:"alive,omitempty"`
-	Dead  []*GossipMessage `protobuf:"bytes,2,rep,name=dead" json:"dead,omitempty"`
+	Alive []*Envelope `protobuf:"bytes,1,rep,name=alive" json:"alive,omitempty"`
+	Dead  []*Envelope `protobuf:"bytes,2,rep,name=dead" json:"dead,omitempty"`
 }
 
 func (m *MembershipResponse) Reset()                    { *m = MembershipResponse{} }
 func (m *MembershipResponse) String() string            { return proto.CompactTextString(m) }
 func (*MembershipResponse) ProtoMessage()               {}
-func (*MembershipResponse) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{17} }
+func (*MembershipResponse) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{19} }
 
-func (m *MembershipResponse) GetAlive() []*GossipMessage {
+func (m *MembershipResponse) GetAlive() []*Envelope {
 	if m != nil {
 		return m.Alive
 	}
 	return nil
 }
 
-func (m *MembershipResponse) GetDead() []*GossipMessage {
+func (m *MembershipResponse) GetDead() []*Envelope {
 	if m != nil {
 		return m.Dead
 	}
@@ -992,38 +1106,13 @@ func (m *MembershipResponse) GetDead() []*GossipMessage {
 type Member struct {
 	Endpoint string `protobuf:"bytes,1,opt,name=endpoint" json:"endpoint,omitempty"`
 	Metadata []byte `protobuf:"bytes,2,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	PkiID    []byte `protobuf:"bytes,3,opt,name=pkiID,proto3" json:"pkiID,omitempty"`
-	// internalEndpoint is used to connect to the peer
-	// if its in your own organization
-	InternalEndpoint *SignedEndpoint `protobuf:"bytes,4,opt,name=internalEndpoint" json:"internalEndpoint,omitempty"`
+	PkiId    []byte `protobuf:"bytes,3,opt,name=pki_id,json=pkiId,proto3" json:"pki_id,omitempty"`
 }
 
 func (m *Member) Reset()                    { *m = Member{} }
 func (m *Member) String() string            { return proto.CompactTextString(m) }
 func (*Member) ProtoMessage()               {}
-func (*Member) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{18} }
-
-func (m *Member) GetInternalEndpoint() *SignedEndpoint {
-	if m != nil {
-		return m.InternalEndpoint
-	}
-	return nil
-}
-
-// SignedEndpoint is an endpoint that has a signature
-// on it. The signature needs to be verified
-// by the relevant certificate of the peer
-// that sent the message the SignedEndpoint
-// is part of.
-type SignedEndpoint struct {
-	Endpoint  string `protobuf:"bytes,1,opt,name=endpoint" json:"endpoint,omitempty"`
-	Signature []byte `protobuf:"bytes,2,opt,name=signature,proto3" json:"signature,omitempty"`
-}
-
-func (m *SignedEndpoint) Reset()                    { *m = SignedEndpoint{} }
-func (m *SignedEndpoint) String() string            { return proto.CompactTextString(m) }
-func (*SignedEndpoint) ProtoMessage()               {}
-func (*SignedEndpoint) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{19} }
+func (*Member) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{20} }
 
 // Empty is used for pinging and in tests
 type Empty struct {
@@ -1032,18 +1121,18 @@ type Empty struct {
 func (m *Empty) Reset()                    { *m = Empty{} }
 func (m *Empty) String() string            { return proto.CompactTextString(m) }
 func (*Empty) ProtoMessage()               {}
-func (*Empty) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{20} }
+func (*Empty) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{21} }
 
 // RemoteStateRequest is used to ask a set of blocks
 // from a remote peer
 type RemoteStateRequest struct {
-	SeqNums []uint64 `protobuf:"varint,1,rep,packed,name=seqNums" json:"seqNums,omitempty"`
+	SeqNums []uint64 `protobuf:"varint,1,rep,packed,name=seq_nums,json=seqNums" json:"seq_nums,omitempty"`
 }
 
 func (m *RemoteStateRequest) Reset()                    { *m = RemoteStateRequest{} }
 func (m *RemoteStateRequest) String() string            { return proto.CompactTextString(m) }
 func (*RemoteStateRequest) ProtoMessage()               {}
-func (*RemoteStateRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{21} }
+func (*RemoteStateRequest) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{22} }
 
 // RemoteStateResponse is used to send a set of blocks
 // to a remote peer
@@ -1054,7 +1143,7 @@ type RemoteStateResponse struct {
 func (m *RemoteStateResponse) Reset()                    { *m = RemoteStateResponse{} }
 func (m *RemoteStateResponse) String() string            { return proto.CompactTextString(m) }
 func (*RemoteStateResponse) ProtoMessage()               {}
-func (*RemoteStateResponse) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{22} }
+func (*RemoteStateResponse) Descriptor() ([]byte, []int) { return fileDescriptor0, []int{23} }
 
 func (m *RemoteStateResponse) GetPayloads() []*Payload {
 	if m != nil {
@@ -1064,7 +1153,9 @@ func (m *RemoteStateResponse) GetPayloads() []*Payload {
 }
 
 func init() {
-	proto.RegisterType((*SignedGossipMessage)(nil), "gossip.SignedGossipMessage")
+	proto.RegisterType((*Envelope)(nil), "gossip.Envelope")
+	proto.RegisterType((*SecretEnvelope)(nil), "gossip.SecretEnvelope")
+	proto.RegisterType((*Secret)(nil), "gossip.Secret")
 	proto.RegisterType((*GossipMessage)(nil), "gossip.GossipMessage")
 	proto.RegisterType((*StateInfo)(nil), "gossip.StateInfo")
 	proto.RegisterType((*StateInfoSnapshot)(nil), "gossip.StateInfoSnapshot")
@@ -1083,7 +1174,6 @@ func init() {
 	proto.RegisterType((*MembershipRequest)(nil), "gossip.MembershipRequest")
 	proto.RegisterType((*MembershipResponse)(nil), "gossip.MembershipResponse")
 	proto.RegisterType((*Member)(nil), "gossip.Member")
-	proto.RegisterType((*SignedEndpoint)(nil), "gossip.SignedEndpoint")
 	proto.RegisterType((*Empty)(nil), "gossip.Empty")
 	proto.RegisterType((*RemoteStateRequest)(nil), "gossip.RemoteStateRequest")
 	proto.RegisterType((*RemoteStateResponse)(nil), "gossip.RemoteStateResponse")
@@ -1126,8 +1216,8 @@ func (c *gossipClient) GossipStream(ctx context.Context, opts ...grpc.CallOption
 }
 
 type Gossip_GossipStreamClient interface {
-	Send(*GossipMessage) error
-	Recv() (*GossipMessage, error)
+	Send(*Envelope) error
+	Recv() (*Envelope, error)
 	grpc.ClientStream
 }
 
@@ -1135,12 +1225,12 @@ type gossipGossipStreamClient struct {
 	grpc.ClientStream
 }
 
-func (x *gossipGossipStreamClient) Send(m *GossipMessage) error {
+func (x *gossipGossipStreamClient) Send(m *Envelope) error {
 	return x.ClientStream.SendMsg(m)
 }
 
-func (x *gossipGossipStreamClient) Recv() (*GossipMessage, error) {
-	m := new(GossipMessage)
+func (x *gossipGossipStreamClient) Recv() (*Envelope, error) {
+	m := new(Envelope)
 	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
@@ -1174,8 +1264,8 @@ func _Gossip_GossipStream_Handler(srv interface{}, stream grpc.ServerStream) err
 }
 
 type Gossip_GossipStreamServer interface {
-	Send(*GossipMessage) error
-	Recv() (*GossipMessage, error)
+	Send(*Envelope) error
+	Recv() (*Envelope, error)
 	grpc.ServerStream
 }
 
@@ -1183,12 +1273,12 @@ type gossipGossipStreamServer struct {
 	grpc.ServerStream
 }
 
-func (x *gossipGossipStreamServer) Send(m *GossipMessage) error {
+func (x *gossipGossipStreamServer) Send(m *Envelope) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-func (x *gossipGossipStreamServer) Recv() (*GossipMessage, error) {
-	m := new(GossipMessage)
+func (x *gossipGossipStreamServer) Recv() (*Envelope, error) {
+	m := new(Envelope)
 	if err := x.ServerStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
@@ -1236,84 +1326,88 @@ var _Gossip_serviceDesc = grpc.ServiceDesc{
 func init() { proto.RegisterFile("gossip/message.proto", fileDescriptor0) }
 
 var fileDescriptor0 = []byte{
-	// 1250 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x09, 0x6e, 0x88, 0x02, 0xff, 0xb4, 0x57, 0x5f, 0x4f, 0xdc, 0x46,
-	0x10, 0x3f, 0x73, 0x7f, 0x3d, 0x77, 0x07, 0x66, 0x21, 0x91, 0x4b, 0x53, 0x09, 0x59, 0x6d, 0x45,
-	0x8a, 0x72, 0x34, 0x24, 0x0f, 0x55, 0x5f, 0x52, 0xc8, 0x91, 0x1c, 0x51, 0xee, 0x82, 0x16, 0xf2,
-	0x90, 0xbe, 0xa0, 0xe5, 0xbc, 0xf8, 0x5c, 0xec, 0xb5, 0xe3, 0x5d, 0x5a, 0x21, 0x55, 0xea, 0x7b,
-	0x3f, 0x42, 0x3f, 0x40, 0x3f, 0x67, 0xb5, 0xbb, 0x5e, 0x9f, 0xcd, 0x1d, 0x54, 0x54, 0xea, 0x9b,
-	0x67, 0xf6, 0x37, 0x7f, 0x76, 0x66, 0x76, 0x66, 0x0c, 0x9b, 0x41, 0xc2, 0x79, 0x98, 0xee, 0xc5,
-	0x94, 0x73, 0x12, 0xd0, 0x41, 0x9a, 0x25, 0x22, 0x41, 0x2d, 0xcd, 0xf5, 0xc6, 0xb0, 0x71, 0x1a,
-	0x06, 0x8c, 0xfa, 0x6f, 0x15, 0x3d, 0xd6, 0x20, 0xe4, 0x42, 0x3b, 0x25, 0x37, 0x51, 0x42, 0x7c,
-	0xd7, 0xda, 0xb6, 0x76, 0x7a, 0xd8, 0x90, 0xe8, 0x09, 0xd8, 0x3c, 0x0c, 0x18, 0x11, 0xd7, 0x19,
-	0x75, 0x57, 0xd4, 0xd9, 0x9c, 0xe1, 0xfd, 0x6d, 0x43, 0xbf, 0xaa, 0x69, 0x13, 0x9a, 0x2c, 0x61,
-	0x53, 0xaa, 0xf4, 0x34, 0xb0, 0x26, 0xa4, 0xfe, 0xe9, 0x8c, 0x30, 0x46, 0xa3, 0x5c, 0x87, 0x21,
-	0xd1, 0x2e, 0xd4, 0x05, 0x09, 0xdc, 0xfa, 0xb6, 0xb5, 0xb3, 0xba, 0xff, 0xc5, 0x40, 0xbb, 0x39,
-	0xa8, 0xe8, 0x1c, 0x9c, 0x91, 0x00, 0x4b, 0x54, 0xd5, 0x99, 0xc6, 0x2d, 0x67, 0xd0, 0x3e, 0x74,
-	0x48, 0x14, 0xfe, 0x4a, 0xc7, 0x3c, 0x70, 0x9b, 0xdb, 0xd6, 0x4e, 0x77, 0x7f, 0xd3, 0xe8, 0x3b,
-	0x50, 0x7c, 0xad, 0x6e, 0x54, 0xc3, 0x05, 0x0e, 0xbd, 0x80, 0x56, 0x4c, 0x63, 0x4c, 0x3f, 0xbb,
-	0x2d, 0x25, 0x51, 0x78, 0x30, 0xa6, 0xf1, 0x05, 0xcd, 0xf8, 0x2c, 0x4c, 0x31, 0xfd, 0x7c, 0x4d,
-	0xb9, 0x18, 0xd5, 0x70, 0x0e, 0x45, 0x2f, 0x73, 0x21, 0xee, 0xb6, 0x95, 0xd0, 0xd6, 0x32, 0x21,
-	0x9e, 0x26, 0x8c, 0xd3, 0x42, 0x8a, 0xa3, 0x3d, 0x68, 0xfb, 0x44, 0x10, 0xe9, 0x5d, 0x47, 0x89,
-	0x6d, 0x18, 0xb1, 0xa1, 0x64, 0x17, 0xce, 0x19, 0x14, 0xda, 0x85, 0xe6, 0x8c, 0x46, 0x51, 0xe2,
-	0xda, 0x55, 0xb8, 0x0e, 0xce, 0x48, 0x1e, 0x8d, 0x6a, 0x58, 0x63, 0xd0, 0x40, 0x6b, 0x1f, 0x86,
-	0x81, 0x0b, 0x0a, 0x8e, 0xca, 0xda, 0x87, 0x61, 0xa0, 0xaf, 0x60, 0x40, 0xc6, 0x1b, 0x79, 0xf3,
-	0xee, 0xa2, 0x37, 0xf3, 0x3b, 0x1b, 0x14, 0x7a, 0x09, 0x20, 0x3f, 0x3f, 0xa6, 0x3e, 0x11, 0xd4,
-	0xed, 0x2d, 0xda, 0xd0, 0x27, 0xa3, 0x1a, 0x2e, 0xe1, 0xd0, 0x37, 0xd0, 0xa4, 0x71, 0x2a, 0x6e,
-	0xdc, 0xbe, 0x12, 0xe8, 0x1b, 0x81, 0x23, 0xc9, 0x94, 0xde, 0xab, 0x53, 0xb4, 0x0b, 0x8d, 0x69,
-	0xc2, 0x98, 0xbb, 0xaa, 0x50, 0x8f, 0x0c, 0xea, 0x75, 0xc2, 0xd8, 0x11, 0x17, 0xe4, 0x22, 0x0a,
-	0xf9, 0x6c, 0x54, 0xc3, 0x0a, 0x84, 0x9e, 0x83, 0xcd, 0x05, 0x11, 0xf4, 0x98, 0x5d, 0x26, 0xee,
-	0x9a, 0x92, 0x58, 0x37, 0x12, 0xa7, 0xe6, 0x60, 0x54, 0xc3, 0x73, 0x14, 0x3a, 0x80, 0xbe, 0x22,
-	0x4e, 0x19, 0x49, 0xf9, 0x2c, 0x11, 0xae, 0x53, 0xcd, 0x76, 0x21, 0x66, 0x00, 0xa3, 0x1a, 0xae,
-	0x4a, 0xa0, 0x77, 0xe0, 0x14, 0xfa, 0x4e, 0xae, 0xa3, 0x48, 0x46, 0x6e, 0x5d, 0x69, 0x79, 0xb2,
-	0xa0, 0x25, 0x3f, 0xcf, 0x43, 0xb8, 0x20, 0x87, 0x7e, 0x82, 0x9e, 0xe2, 0xe5, 0x18, 0x17, 0x55,
-	0xcb, 0x08, 0xd3, 0x38, 0x11, 0xf4, 0xb4, 0x84, 0x18, 0xd5, 0x70, 0x45, 0x02, 0xbd, 0xce, 0x2f,
-	0x64, 0xea, 0xcc, 0xdd, 0x50, 0x2a, 0xbe, 0x5c, 0xaa, 0xa2, 0x28, 0xc5, 0xaa, 0x8c, 0x8c, 0x4a,
-	0x44, 0x89, 0xaf, 0x2b, 0x56, 0xd6, 0xe5, 0x66, 0x35, 0x2a, 0xef, 0xe7, 0x87, 0x45, 0x75, 0x56,
-	0x25, 0xd0, 0x8f, 0xd0, 0x4b, 0x29, 0xcd, 0x8e, 0x7d, 0xca, 0x44, 0x28, 0x6e, 0xdc, 0x47, 0xd5,
-	0x77, 0x77, 0x52, 0x3a, 0x93, 0x77, 0x28, 0x63, 0xbd, 0x73, 0xa8, 0x9f, 0x91, 0x00, 0xf5, 0xc1,
-	0xfe, 0x38, 0x19, 0x1e, 0xbd, 0x39, 0x9e, 0x1c, 0x0d, 0x9d, 0x1a, 0xb2, 0xa1, 0x79, 0x34, 0x3e,
-	0x39, 0xfb, 0xe4, 0x58, 0xa8, 0x07, 0x9d, 0x0f, 0xf8, 0xed, 0xf9, 0x87, 0xc9, 0xfb, 0x4f, 0xce,
-	0x8a, 0xc4, 0xbd, 0x1e, 0x1d, 0x4c, 0x34, 0x59, 0x47, 0x0e, 0xf4, 0x14, 0x79, 0x30, 0x19, 0x9e,
-	0x7f, 0xc0, 0x6f, 0x9d, 0x06, 0x5a, 0x83, 0xae, 0x06, 0x60, 0xc5, 0x68, 0x1e, 0xda, 0xd0, 0x9e,
-	0x26, 0x4c, 0x50, 0x26, 0xbc, 0x18, 0xec, 0x22, 0x3b, 0x68, 0x0b, 0x3a, 0x31, 0x15, 0x44, 0x96,
-	0x69, 0xde, 0xee, 0x0a, 0x1a, 0x0d, 0xc0, 0x16, 0x61, 0x4c, 0xb9, 0x20, 0x71, 0xaa, 0x7a, 0x55,
-	0x77, 0xdf, 0x29, 0xdf, 0xe6, 0x2c, 0x8c, 0x29, 0x9e, 0x43, 0x64, 0xbf, 0x4b, 0xaf, 0xc2, 0xe3,
-	0xa1, 0xea, 0x60, 0x3d, 0xac, 0x09, 0xef, 0x0d, 0xac, 0x2f, 0x94, 0x14, 0x7a, 0x0e, 0x1d, 0x1a,
-	0xd1, 0x98, 0x32, 0xc1, 0x5d, 0x6b, 0xbb, 0x5e, 0x2e, 0xf4, 0x4a, 0xbf, 0xc3, 0x05, 0xcc, 0x7b,
-	0x0c, 0x9b, 0xcb, 0x8a, 0xca, 0x1b, 0x43, 0xbf, 0xf2, 0x36, 0xe6, 0x6e, 0x58, 0x25, 0x37, 0x10,
-	0x82, 0xc6, 0x94, 0x66, 0x22, 0xef, 0xb9, 0xea, 0x5b, 0xf2, 0x66, 0x84, 0xcf, 0x72, 0x7f, 0xd5,
-	0xb7, 0x77, 0x06, 0xbd, 0x72, 0xa6, 0x1e, 0xa0, 0xad, 0x1c, 0xca, 0x7a, 0x35, 0x94, 0x5e, 0x04,
-	0xdd, 0x52, 0x2f, 0xb9, 0x7b, 0x32, 0xf8, 0xaa, 0x39, 0x71, 0x77, 0x65, 0xbb, 0xbe, 0x63, 0x63,
-	0x43, 0xa2, 0x67, 0xd0, 0x8e, 0x79, 0x70, 0x76, 0x93, 0xd2, 0x7c, 0x3a, 0x14, 0x1d, 0x4a, 0x46,
-	0x62, 0xac, 0x8f, 0xb0, 0xc1, 0x78, 0x0c, 0xba, 0xa5, 0xc6, 0x78, 0x87, 0xb5, 0xb2, 0xbb, 0x2b,
-	0xb7, 0x32, 0xff, 0x40, 0x7b, 0xbf, 0x03, 0xcc, 0xbb, 0xde, 0x1d, 0xe6, 0x9e, 0x42, 0x23, 0x37,
-	0x75, 0x4f, 0xb6, 0x1b, 0xff, 0xc5, 0xfa, 0x95, 0xb6, 0xae, 0xfb, 0xfa, 0xff, 0x1d, 0xda, 0x1f,
-	0x74, 0x22, 0xcd, 0x88, 0x7f, 0x5a, 0x5d, 0x16, 0xba, 0xfb, 0x6b, 0x85, 0xb4, 0x66, 0x17, 0xdb,
-	0x83, 0x77, 0x0c, 0xed, 0x9c, 0x87, 0x1e, 0x43, 0x8b, 0xd3, 0xcf, 0x93, 0xeb, 0x38, 0x77, 0x32,
-	0xa7, 0x8a, 0x7a, 0x94, 0xe9, 0xb0, 0x75, 0x3d, 0x4a, 0x5e, 0xa9, 0xa2, 0xd4, 0xb7, 0xf7, 0xa7,
-	0x05, 0xbd, 0xf2, 0x18, 0x47, 0x03, 0x80, 0xb8, 0x98, 0xb7, 0xb9, 0x27, 0xab, 0xd5, 0x49, 0x8c,
-	0x4b, 0x88, 0x07, 0xbf, 0xec, 0x2d, 0xe8, 0x84, 0xa6, 0xad, 0xe9, 0x5d, 0xa3, 0xa0, 0xbd, 0x3f,
-	0x60, 0x7d, 0xa1, 0x39, 0xde, 0xf1, 0x6a, 0x1e, 0x6a, 0xf6, 0x6b, 0xe8, 0x87, 0x7c, 0x48, 0xa7,
-	0x11, 0xc9, 0x88, 0x08, 0x13, 0xa6, 0x82, 0xd0, 0xc1, 0x55, 0xa6, 0x77, 0x00, 0x1d, 0x23, 0x8c,
-	0xbe, 0x02, 0x08, 0xd9, 0xf4, 0x9c, 0x5d, 0xcb, 0xab, 0xe6, 0xd1, 0xb5, 0x43, 0x36, 0x9d, 0x28,
-	0x46, 0x29, 0xf0, 0x2b, 0xe5, 0xc0, 0x7b, 0xbf, 0xc0, 0xfa, 0xc2, 0x92, 0x83, 0x5e, 0xc1, 0x1a,
-	0xa7, 0xd1, 0xa5, 0xec, 0x37, 0x59, 0xac, 0xed, 0x5b, 0xd5, 0x99, 0x5c, 0x2d, 0xde, 0xdb, 0x68,
-	0x19, 0x84, 0x2b, 0x96, 0xfc, 0xc6, 0x54, 0xc9, 0xf5, 0xb0, 0x26, 0xbc, 0x08, 0xd0, 0xe2, 0x6e,
-	0x24, 0x17, 0x1c, 0xb5, 0x88, 0xdd, 0xdf, 0x0d, 0x35, 0x46, 0xbd, 0x25, 0x4a, 0xfc, 0x7f, 0x7b,
-	0x4b, 0x94, 0xf8, 0xde, 0x5f, 0x16, 0xb4, 0xb4, 0x39, 0x99, 0x44, 0xca, 0xfc, 0x34, 0x09, 0x99,
-	0x50, 0x17, 0xb1, 0x71, 0x41, 0xdf, 0xdb, 0x0c, 0x96, 0xb6, 0x75, 0x74, 0x08, 0x4e, 0xc8, 0x04,
-	0xcd, 0x18, 0x89, 0x8e, 0x8c, 0xd6, 0x86, 0x0a, 0xcf, 0xe3, 0x62, 0x07, 0x50, 0xdb, 0xb5, 0x39,
-	0xc5, 0x0b, 0x78, 0xef, 0x1d, 0xac, 0x56, 0x31, 0xf7, 0xfa, 0x78, 0xff, 0xfa, 0xdd, 0x86, 0xa6,
-	0x5a, 0xa4, 0xbc, 0x01, 0xa0, 0xc5, 0xa5, 0x41, 0x36, 0x00, 0x9d, 0x6b, 0x3d, 0x6f, 0x1a, 0xd8,
-	0x90, 0xde, 0x21, 0x6c, 0x2c, 0xd9, 0x10, 0xd0, 0x2e, 0x74, 0xf2, 0x97, 0x6b, 0x26, 0xd4, 0xc2,
-	0xd3, 0x2e, 0x00, 0xdf, 0xbd, 0x82, 0x6e, 0xa9, 0x5b, 0xa8, 0x31, 0xce, 0x7c, 0x7a, 0x19, 0x32,
-	0xea, 0x3b, 0x35, 0x39, 0x9e, 0x0f, 0xa3, 0x64, 0x7a, 0x95, 0x67, 0xc6, 0xb1, 0xe4, 0x78, 0x36,
-	0x03, 0x66, 0xcc, 0x03, 0x67, 0x65, 0x5f, 0x40, 0x4b, 0x67, 0x0f, 0x1d, 0x42, 0x4f, 0x7f, 0x9d,
-	0x8a, 0x8c, 0x92, 0x18, 0x2d, 0xcf, 0xee, 0xd6, 0x72, 0xb6, 0x57, 0xdb, 0xb1, 0xbe, 0xb7, 0xd0,
-	0xb7, 0xd0, 0x38, 0x09, 0x59, 0x80, 0xaa, 0x2b, 0xe6, 0x56, 0x95, 0xf4, 0x6a, 0x87, 0xcf, 0x7e,
-	0xde, 0x0d, 0x42, 0x31, 0xbb, 0xbe, 0x18, 0x4c, 0x93, 0x78, 0x6f, 0x76, 0x93, 0xd2, 0x2c, 0xa2,
-	0x7e, 0x40, 0xb3, 0xbd, 0x4b, 0x72, 0x91, 0x85, 0xd3, 0x3d, 0xf5, 0xc3, 0xc4, 0xf7, 0xb4, 0xd8,
-	0x45, 0x4b, 0x91, 0x2f, 0xfe, 0x09, 0x00, 0x00, 0xff, 0xff, 0xaf, 0xae, 0x6f, 0x88, 0x57, 0x0d,
-	0x00, 0x00,
+	// 1320 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x09, 0x6e, 0x88, 0x02, 0xff, 0xb4, 0x57, 0xdf, 0x6f, 0xdb, 0xb6,
+	0x13, 0xb7, 0xe3, 0x9f, 0x3a, 0xff, 0x88, 0xc3, 0xa4, 0xfd, 0xaa, 0xf9, 0x76, 0x40, 0x20, 0xac,
+	0x45, 0xb6, 0x74, 0x76, 0x91, 0x6e, 0x40, 0x81, 0x62, 0x03, 0x92, 0xda, 0x8b, 0xbd, 0xd5, 0x4e,
+	0xa0, 0xb8, 0x18, 0xba, 0x17, 0x83, 0xb6, 0x2e, 0xb2, 0x56, 0x89, 0x52, 0x44, 0xba, 0x5b, 0x1e,
+	0xb7, 0xc7, 0xfd, 0x05, 0xfb, 0x73, 0x07, 0x91, 0x92, 0x2c, 0xd5, 0x49, 0x81, 0x14, 0xd8, 0x9b,
+	0xee, 0x78, 0x9f, 0xbb, 0xe3, 0x87, 0xc7, 0x3b, 0x0a, 0xf6, 0x6c, 0x9f, 0x73, 0x27, 0xe8, 0x79,
+	0xc8, 0x39, 0xb5, 0xb1, 0x1b, 0x84, 0xbe, 0xf0, 0x49, 0x55, 0x69, 0x8d, 0xbf, 0x8a, 0x50, 0x1f,
+	0xb0, 0x0f, 0xe8, 0xfa, 0x01, 0x12, 0x1d, 0x6a, 0x01, 0xbd, 0x71, 0x7d, 0x6a, 0xe9, 0xc5, 0x83,
+	0xe2, 0x61, 0xd3, 0x4c, 0x44, 0xf2, 0x18, 0x34, 0xee, 0xd8, 0x8c, 0x8a, 0x55, 0x88, 0xfa, 0x96,
+	0x5c, 0x5b, 0x2b, 0xc8, 0x0f, 0xd0, 0xe6, 0xb8, 0x08, 0x51, 0x24, 0x9e, 0xf4, 0xd2, 0x41, 0xf1,
+	0xb0, 0x71, 0xfc, 0xb0, 0xab, 0xa2, 0x74, 0x2f, 0x73, 0xab, 0xe6, 0x47, 0xd6, 0xc6, 0x10, 0xda,
+	0x79, 0x8b, 0xcf, 0xcd, 0xc4, 0x38, 0x81, 0xaa, 0xf2, 0x44, 0x9e, 0x41, 0xc7, 0x61, 0x02, 0x43,
+	0x46, 0xdd, 0x01, 0xb3, 0x02, 0xdf, 0x61, 0x42, 0xba, 0xd2, 0x86, 0x05, 0x73, 0x63, 0xe5, 0x54,
+	0x83, 0xda, 0xc2, 0x67, 0x02, 0x99, 0x30, 0xfe, 0xd1, 0xa0, 0x75, 0x26, 0xd3, 0x1e, 0x2b, 0xc6,
+	0xc8, 0x1e, 0x54, 0x98, 0xcf, 0x16, 0x28, 0xf1, 0x65, 0x53, 0x09, 0x51, 0x8a, 0x8b, 0x25, 0x65,
+	0x0c, 0xdd, 0x38, 0x8d, 0x44, 0x24, 0x47, 0x50, 0x12, 0xd4, 0x96, 0x1c, 0xb4, 0x8f, 0x1f, 0x25,
+	0x1c, 0xe4, 0x7c, 0x76, 0xa7, 0xd4, 0x36, 0x23, 0x2b, 0xf2, 0x02, 0x34, 0xea, 0x3a, 0x1f, 0x70,
+	0xe6, 0x71, 0x5b, 0xaf, 0x48, 0xda, 0xf6, 0x12, 0xc8, 0x49, 0xb4, 0x10, 0x23, 0x86, 0x05, 0xb3,
+	0x2e, 0x0d, 0xc7, 0xdc, 0x26, 0xdf, 0x42, 0xcd, 0x43, 0x6f, 0x16, 0xe2, 0xb5, 0x5e, 0x95, 0x90,
+	0x34, 0xca, 0x18, 0xbd, 0x39, 0x86, 0x7c, 0xe9, 0x04, 0x26, 0x5e, 0xaf, 0x90, 0x8b, 0x61, 0xc1,
+	0xac, 0x7a, 0xe8, 0x99, 0x78, 0x4d, 0xbe, 0x4b, 0x50, 0x5c, 0xaf, 0x49, 0xd4, 0xfe, 0x6d, 0x28,
+	0x1e, 0xf8, 0x8c, 0x63, 0x0a, 0xe3, 0xe4, 0x39, 0xd4, 0x2d, 0x2a, 0xa8, 0x4c, 0xb0, 0x2e, 0x71,
+	0xbb, 0x09, 0xae, 0x4f, 0x05, 0x5d, 0xe7, 0x57, 0x8b, 0xcc, 0xa2, 0xf4, 0x8e, 0xa0, 0xb2, 0x44,
+	0xd7, 0xf5, 0x75, 0x2d, 0x6f, 0xae, 0x28, 0x18, 0x46, 0x4b, 0xc3, 0x82, 0xa9, 0x6c, 0x48, 0x2f,
+	0x76, 0x6f, 0x39, 0xb6, 0x0e, 0xd2, 0x9e, 0x64, 0xdd, 0xf7, 0x1d, 0x5b, 0xed, 0x42, 0x7a, 0xef,
+	0x3b, 0x76, 0x9a, 0x4f, 0xb4, 0xfb, 0xc6, 0x66, 0x3e, 0xeb, 0x7d, 0x4b, 0x84, 0xda, 0x78, 0x43,
+	0x22, 0x56, 0x81, 0x45, 0x05, 0xea, 0xcd, 0xcd, 0x28, 0x6f, 0xe5, 0xca, 0xb0, 0x60, 0x82, 0x95,
+	0x4a, 0xe4, 0x09, 0x54, 0xd0, 0x0b, 0xc4, 0x8d, 0xde, 0x92, 0x80, 0x56, 0x02, 0x18, 0x44, 0xca,
+	0x68, 0x03, 0x72, 0x95, 0x1c, 0x41, 0x79, 0xe1, 0x33, 0xa6, 0xb7, 0xa5, 0xd5, 0x83, 0xc4, 0xea,
+	0xb5, 0xcf, 0xd8, 0x80, 0x0b, 0x3a, 0x77, 0x1d, 0xbe, 0x1c, 0x16, 0x4c, 0x69, 0x44, 0x8e, 0x01,
+	0xb8, 0xa0, 0x02, 0x67, 0x0e, 0xbb, 0xf2, 0xf5, 0x6d, 0x09, 0xd9, 0x49, 0xaf, 0x49, 0xb4, 0x32,
+	0x62, 0x57, 0x11, 0x3b, 0x1a, 0x4f, 0x04, 0x72, 0x0a, 0x6d, 0x85, 0xe1, 0x8c, 0x06, 0x7c, 0xe9,
+	0x0b, 0xbd, 0x93, 0x3f, 0xf4, 0x14, 0x77, 0x19, 0x1b, 0x0c, 0x0b, 0x66, 0x4b, 0x42, 0x12, 0x05,
+	0x19, 0xc3, 0xee, 0x3a, 0xee, 0x2c, 0x58, 0xb9, 0xae, 0xe4, 0x6f, 0x47, 0x3a, 0x7a, 0xbc, 0xe1,
+	0xe8, 0x62, 0xe5, 0xba, 0x6b, 0x22, 0x3b, 0xfc, 0x23, 0x3d, 0x39, 0x01, 0xe5, 0x3f, 0x72, 0x12,
+	0x19, 0xe9, 0x24, 0x5f, 0x50, 0x26, 0x7a, 0xbe, 0x40, 0xe9, 0x6e, 0xed, 0xa6, 0xc9, 0x33, 0x32,
+	0xe9, 0x27, 0xbb, 0x0a, 0xe3, 0x92, 0xd3, 0x77, 0xa5, 0x8f, 0xff, 0xdf, 0xea, 0x23, 0xad, 0xca,
+	0x16, 0xcf, 0x2a, 0x22, 0x6e, 0x5c, 0xa4, 0x96, 0x2a, 0x5e, 0x59, 0xa2, 0x7b, 0x79, 0x6e, 0xde,
+	0xa4, 0xab, 0xeb, 0x42, 0x6d, 0xad, 0x21, 0x51, 0xb9, 0xbe, 0x82, 0x56, 0x80, 0x18, 0xce, 0x1c,
+	0x0b, 0x99, 0x70, 0xc4, 0x8d, 0xfe, 0x20, 0x7f, 0x0d, 0x2f, 0x10, 0xc3, 0x51, 0xbc, 0x16, 0x6d,
+	0x23, 0xc8, 0xc8, 0xc6, 0x0c, 0x4a, 0x53, 0x6a, 0x93, 0x16, 0x68, 0x6f, 0x27, 0xfd, 0xc1, 0x8f,
+	0xa3, 0xc9, 0xa0, 0xdf, 0x29, 0x10, 0x0d, 0x2a, 0x83, 0xf1, 0xc5, 0xf4, 0x5d, 0xa7, 0x48, 0x9a,
+	0x50, 0x3f, 0x37, 0xcf, 0x66, 0xe7, 0x93, 0x37, 0xef, 0x3a, 0x5b, 0x91, 0xdd, 0xeb, 0xe1, 0xc9,
+	0x44, 0x89, 0x25, 0xd2, 0x81, 0xa6, 0x14, 0x4f, 0x26, 0xfd, 0xd9, 0xb9, 0x79, 0xd6, 0x29, 0x93,
+	0x6d, 0x68, 0x28, 0x03, 0x53, 0x2a, 0x2a, 0xd9, 0xd6, 0xc4, 0x40, 0x4b, 0x4f, 0x88, 0xec, 0x43,
+	0xdd, 0x43, 0x41, 0xa3, 0x7a, 0x8d, 0x7b, 0x64, 0x2a, 0x93, 0x2e, 0x68, 0xc2, 0xf1, 0x90, 0x0b,
+	0xea, 0x05, 0xb2, 0x3b, 0x35, 0x8e, 0x3b, 0xd9, 0xdd, 0x4c, 0x1d, 0x0f, 0xcd, 0xb5, 0x09, 0x79,
+	0x00, 0xd5, 0xe0, 0xbd, 0x33, 0x73, 0x2c, 0xd9, 0xb4, 0x9a, 0x66, 0x25, 0x78, 0xef, 0x8c, 0x2c,
+	0xe3, 0x04, 0x76, 0x36, 0x4a, 0x8b, 0x3c, 0x83, 0x3a, 0xba, 0xe8, 0x21, 0x13, 0x5c, 0x2f, 0x1e,
+	0x94, 0xb2, 0xae, 0xd3, 0x06, 0x9f, 0x5a, 0x18, 0x0f, 0x61, 0xef, 0xb6, 0xa2, 0x32, 0x26, 0xd0,
+	0xca, 0x5d, 0x90, 0x4c, 0x0a, 0xc5, 0x4c, 0x0a, 0x84, 0x40, 0x79, 0x81, 0xa1, 0x88, 0x5b, 0xac,
+	0xfc, 0x8e, 0x74, 0x4b, 0xca, 0x97, 0x71, 0xae, 0xf2, 0xdb, 0x78, 0x0b, 0xcd, 0xec, 0x31, 0xdd,
+	0xc7, 0x5d, 0x96, 0xc8, 0x52, 0x9e, 0x48, 0xc3, 0x83, 0x46, 0xa6, 0xa7, 0xdc, 0x3d, 0x09, 0x2c,
+	0xd9, 0xa5, 0xb8, 0xbe, 0x75, 0x50, 0x3a, 0xd4, 0xcc, 0x44, 0x24, 0x5d, 0xa8, 0x7b, 0xdc, 0x9e,
+	0x89, 0x9b, 0x78, 0x24, 0xb6, 0xd7, 0xad, 0x2a, 0x22, 0x63, 0xcc, 0xed, 0xe9, 0x4d, 0x80, 0x66,
+	0xcd, 0x53, 0x1f, 0x86, 0x0f, 0x8d, 0x4c, 0x8f, 0xbc, 0x23, 0x5c, 0x36, 0xdf, 0xad, 0x8d, 0x83,
+	0xbf, 0x5f, 0xc0, 0x3f, 0x00, 0xd6, 0xed, 0xef, 0x8e, 0x78, 0x5f, 0x42, 0x39, 0x8e, 0x75, 0xfb,
+	0x61, 0x97, 0x3f, 0x2b, 0xb2, 0xab, 0x22, 0xab, 0xf6, 0xfe, 0x9f, 0x13, 0xfb, 0x52, 0x9d, 0x63,
+	0x32, 0xd1, 0xbf, 0xca, 0x3f, 0x2f, 0x1a, 0xc7, 0xdb, 0x29, 0x5a, 0xa9, 0xd3, 0xf7, 0x86, 0xf1,
+	0x13, 0xd4, 0x62, 0x1d, 0xf9, 0x1f, 0xd4, 0x38, 0x5e, 0xcf, 0xd8, 0xca, 0x8b, 0xd3, 0xac, 0x72,
+	0xbc, 0x9e, 0xac, 0xbc, 0xb4, 0x20, 0xa3, 0xd3, 0xd0, 0x54, 0x41, 0x46, 0xba, 0x4c, 0x45, 0xc9,
+	0x6f, 0xe3, 0xef, 0x22, 0x34, 0xb3, 0x33, 0x9d, 0x74, 0x01, 0xbc, 0x74, 0xf4, 0xc6, 0xa9, 0xb4,
+	0xf3, 0x43, 0xd9, 0xcc, 0x58, 0xdc, 0xfb, 0x5e, 0xef, 0x43, 0x3d, 0x6d, 0x6a, 0x65, 0x55, 0x2a,
+	0x89, 0x6c, 0xfc, 0x59, 0x84, 0x9d, 0x8d, 0xe6, 0x78, 0xd7, 0xbd, 0xb9, 0x6f, 0xe0, 0x27, 0xd0,
+	0x76, 0xf8, 0xcc, 0xc2, 0x85, 0x4b, 0x43, 0x2a, 0x1c, 0x9f, 0x49, 0x1e, 0xea, 0x66, 0xcb, 0xe1,
+	0xfd, 0xb5, 0xd2, 0x38, 0x85, 0x7a, 0x82, 0x26, 0x5f, 0x00, 0x38, 0x6c, 0x11, 0xb1, 0x3b, 0xc7,
+	0x30, 0x26, 0x58, 0x73, 0xd8, 0x62, 0x22, 0x15, 0x59, 0xf2, 0xb7, 0xb2, 0xe4, 0x1b, 0x57, 0xb0,
+	0xb3, 0xf1, 0xe8, 0x21, 0xaf, 0xa0, 0xc3, 0xd1, 0xbd, 0x92, 0xd3, 0x2e, 0xf4, 0x54, 0x06, 0xc5,
+	0x7c, 0xda, 0x69, 0xfd, 0x6e, 0x47, 0x96, 0xa3, 0xb5, 0x61, 0x54, 0x8c, 0xef, 0x99, 0xff, 0x3b,
+	0x93, 0x45, 0xd7, 0x34, 0x95, 0x60, 0xcc, 0x81, 0x6c, 0x3e, 0x93, 0xc8, 0x53, 0xa8, 0xc8, 0x57,
+	0xd9, 0x9d, 0xad, 0x50, 0x2d, 0xcb, 0x4b, 0x84, 0xd4, 0xfa, 0xc4, 0x25, 0x42, 0x6a, 0x19, 0xbf,
+	0x40, 0x55, 0xc5, 0x88, 0x4e, 0x0e, 0x73, 0xcf, 0x56, 0x33, 0x95, 0x3f, 0xd9, 0x00, 0xee, 0xe8,
+	0xe4, 0x35, 0xa8, 0xc8, 0x57, 0x8b, 0xd1, 0x03, 0xb2, 0x39, 0x9b, 0xc9, 0x23, 0xa8, 0xc7, 0xe4,
+	0xaa, 0x9e, 0x5e, 0x36, 0x6b, 0x8a, 0x5d, 0x6e, 0x9c, 0xc2, 0xee, 0x2d, 0x83, 0x98, 0x1c, 0x41,
+	0x3d, 0xbe, 0x21, 0xc9, 0x14, 0xd8, 0xb8, 0x42, 0xa9, 0xc1, 0xd7, 0xdf, 0x43, 0x23, 0x73, 0x2b,
+	0x3f, 0x9e, 0x95, 0x2d, 0xd0, 0x4e, 0xdf, 0x9c, 0xbf, 0xfe, 0x79, 0x36, 0xbe, 0x3c, 0xeb, 0x14,
+	0xa3, 0x91, 0x38, 0xea, 0x0f, 0x26, 0xd3, 0xd1, 0xf4, 0x9d, 0xd4, 0x6c, 0x1d, 0xff, 0x06, 0x55,
+	0xd5, 0x15, 0xc9, 0x4b, 0x68, 0xaa, 0xaf, 0x4b, 0x11, 0x22, 0xf5, 0xc8, 0x06, 0x8f, 0xfb, 0x1b,
+	0x1a, 0xa3, 0x70, 0x58, 0x7c, 0x5e, 0x24, 0x4f, 0xa1, 0x7c, 0xe1, 0x30, 0x9b, 0xe4, 0x1f, 0x71,
+	0xfb, 0x79, 0xd1, 0x28, 0x9c, 0x7e, 0xf3, 0xeb, 0x91, 0xed, 0x88, 0xe5, 0x6a, 0xde, 0x5d, 0xf8,
+	0x5e, 0x6f, 0x79, 0x13, 0x60, 0xe8, 0xa2, 0x65, 0x63, 0xd8, 0xbb, 0xa2, 0xf3, 0xd0, 0x59, 0xf4,
+	0xe4, 0xef, 0x13, 0xef, 0x29, 0xd8, 0xbc, 0x2a, 0xc5, 0x17, 0xff, 0x06, 0x00, 0x00, 0xff, 0xff,
+	0x79, 0x1b, 0x21, 0x9a, 0x65, 0x0d, 0x00, 0x00,
 }

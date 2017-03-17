@@ -55,14 +55,60 @@ func TestMockStateRangeQueryIterator(t *testing.T) {
 	}
 }
 
-// TestSetChaincodeLoggingLevel uses the utlity function defined in chaincode.go to
-// set the chaincodeLogger's logging level
-func TestSetChaincodeLoggingLevel(t *testing.T) {
+// TestMockStateRangeQueryIterator_openEnded tests running an open-ended query
+// for all keys on the MockStateRangeQueryIterator
+func TestMockStateRangeQueryIterator_openEnded(t *testing.T) {
+	stub := NewMockStub("rangeTest", nil)
+	stub.MockTransactionStart("init")
+	stub.PutState("1", []byte{61})
+	stub.PutState("0", []byte{62})
+	stub.PutState("5", []byte{65})
+	stub.PutState("3", []byte{63})
+	stub.PutState("4", []byte{64})
+	stub.PutState("6", []byte{66})
+	stub.MockTransactionEnd("init")
+
+	rqi := NewMockStateRangeQueryIterator(stub, "", "")
+
+	count := 0
+	for rqi.HasNext() {
+		rqi.Next()
+		count++
+	}
+
+	if count != rqi.Stub.Keys.Len() {
+		t.FailNow()
+	}
+}
+
+// TestSetupChaincodeLogging uses the utlity function defined in chaincode.go to
+// set the chaincodeLogger's logging format and level
+func TestSetupChaincodeLogging_blankLevel(t *testing.T) {
+	// set log level to a non-default level
+	testLogLevelString := ""
+	testLogFormat := "%{color}%{time:2006-01-02 15:04:05.000 MST} [%{module}] %{shortfunc} -> %{level:.4s} %{id:03x}%{color:reset} %{message}"
+
+	viper.Set("chaincode.logLevel", testLogLevelString)
+	viper.Set("chaincode.logFormat", testLogFormat)
+
+	SetupChaincodeLogging()
+
+	if !IsEnabledForLogLevel("info") {
+		t.FailNow()
+	}
+}
+
+// TestSetupChaincodeLogging uses the utlity function defined in chaincode.go to
+// set the chaincodeLogger's logging format and level
+func TestSetupChaincodeLogging(t *testing.T) {
 	// set log level to a non-default level
 	testLogLevelString := "debug"
-	viper.Set("logging.chaincode", testLogLevelString)
+	testLogFormat := "%{color}%{time:2006-01-02 15:04:05.000 MST} [%{module}] %{shortfunc} -> %{level:.4s} %{id:03x}%{color:reset} %{message}"
 
-	SetChaincodeLoggingLevel()
+	viper.Set("chaincode.logLevel", testLogLevelString)
+	viper.Set("chaincode.logFormat", testLogFormat)
+
+	SetupChaincodeLogging()
 
 	if !IsEnabledForLogLevel(testLogLevelString) {
 		t.FailNow()

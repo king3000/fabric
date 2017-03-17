@@ -26,7 +26,11 @@ import (
 
 	"path/filepath"
 
+	"errors"
+
 	"github.com/golang/protobuf/proto"
+	mockpolicies "github.com/hyperledger/fabric/common/mocks/policies"
+	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/chaincode"
 	"github.com/hyperledger/fabric/core/common/ccprovider"
@@ -141,6 +145,14 @@ func getUpgradeProposal(cds *pb.ChaincodeDeploymentSpec, chainID string, creator
 //getDeployOrUpgradeProposal gets the proposal for the chaincode deploy or upgrade
 //the payload is a ChaincodeDeploymentSpec
 func getDeployOrUpgradeProposal(cds *pb.ChaincodeDeploymentSpec, chainID string, creator []byte, upgrade bool) (*pb.Proposal, error) {
+	//we need to save off the chaincode as we have to instantiate with nil CodePackage
+	var err error
+	if err = ccprovider.PutChaincodeIntoFS(cds); err != nil {
+		return nil, err
+	}
+
+	cds.CodePackage = nil
+
 	b, err := proto.Marshal(cds)
 	if err != nil {
 		return nil, err
@@ -159,10 +171,6 @@ func getDeployOrUpgradeProposal(cds *pb.ChaincodeDeploymentSpec, chainID string,
 	//...and get the proposal for it
 	var prop *pb.Proposal
 	if prop, _, err = getInvokeProposal(lcccSpec, chainID, creator); err != nil {
-		return nil, err
-	}
-
-	if err = ccprovider.PutChaincodeIntoFS(cds); err != nil {
 		return nil, err
 	}
 
@@ -503,6 +511,117 @@ func TestDeployAndUpgrade(t *testing.T) {
 
 	chaincode.GetChain().Stop(ctxt, cccid1, &pb.ChaincodeDeploymentSpec{ChaincodeSpec: &pb.ChaincodeSpec{ChaincodeId: chaincodeID1}})
 	chaincode.GetChain().Stop(ctxt, cccid2, &pb.ChaincodeDeploymentSpec{ChaincodeSpec: &pb.ChaincodeSpec{ChaincodeId: chaincodeID2}})
+}
+
+// TestWritersACLFail deploys a chaincode and then tries to invoke it;
+// however we inject a special policy for writers to simulate
+// the scenario in which the creator of this proposal is not among
+// the writers for the chain
+func TestWritersACLFail(t *testing.T) {
+	//skip pending FAB-2457 fix
+	t.Skip()
+	chainID := util.GetTestChainID()
+	var ctxt = context.Background()
+
+	url := "github.com/hyperledger/fabric/examples/chaincode/go/chaincode_example01"
+	chaincodeID := &pb.ChaincodeID{Path: url, Name: "ex01-fail", Version: "0"}
+
+	defer deleteChaincodeOnDisk("ex01-fail.0")
+
+	args := []string{"10"}
+
+	f := "init"
+	argsDeploy := util.ToChaincodeArgs(f, "a", "100", "b", "200")
+	spec := &pb.ChaincodeSpec{Type: 1, ChaincodeId: chaincodeID, Input: &pb.ChaincodeInput{Args: argsDeploy}}
+
+	cccid := ccprovider.NewCCContext(chainID, "ex01-fail", "0", "", false, nil, nil)
+
+	resp, prop, err := deploy(endorserServer, chainID, spec, nil)
+	chaincodeID1 := spec.ChaincodeId.Name
+	if err != nil {
+		t.Fail()
+		t.Logf("Error deploying <%s>: %s", chaincodeID1, err)
+		chaincode.GetChain().Stop(ctxt, cccid, &pb.ChaincodeDeploymentSpec{ChaincodeSpec: &pb.ChaincodeSpec{ChaincodeId: chaincodeID}})
+		return
+	}
+	var nextBlockNumber uint64 = 3 // The tests that ran before this test created blocks 0-2
+	err = endorserServer.(*Endorser).commitTxSimulation(prop, chainID, signer, resp, nextBlockNumber)
+	if err != nil {
+		t.Fail()
+		t.Logf("Error committing deploy <%s>: %s", chaincodeID1, err)
+		chaincode.GetChain().Stop(ctxt, cccid, &pb.ChaincodeDeploymentSpec{ChaincodeSpec: &pb.ChaincodeSpec{ChaincodeId: chaincodeID}})
+		return
+	}
+
+	// here we inject a reject policy for writers
+	// to simulate the scenario in which the invoker
+	// is not authorized to issue this proposal
+	rejectpolicy := &mockpolicies.Policy{
+		Err: errors.New("The creator of this proposal does not fulfil the writers policy of this chain"),
+	}
+	pm := peer.GetPolicyManager(chainID)
+	pm.(*mockpolicies.Manager).PolicyMap = map[string]*mockpolicies.Policy{policies.ChannelApplicationWriters: rejectpolicy}
+
+	f = "invoke"
+	invokeArgs := append([]string{f}, args...)
+	spec = &pb.ChaincodeSpec{Type: 1, ChaincodeId: chaincodeID, Input: &pb.ChaincodeInput{Args: util.ToChaincodeArgs(invokeArgs...)}}
+	prop, resp, _, _, err = invoke(chainID, spec)
+	if err == nil {
+		t.Fail()
+		t.Logf("Invocation should have failed")
+		chaincode.GetChain().Stop(ctxt, cccid, &pb.ChaincodeDeploymentSpec{ChaincodeSpec: &pb.ChaincodeSpec{ChaincodeId: chaincodeID}})
+		return
+	}
+
+	fmt.Println("TestWritersACLFail passed")
+	t.Logf("TestWritersACLFail passed")
+
+	chaincode.GetChain().Stop(ctxt, cccid, &pb.ChaincodeDeploymentSpec{ChaincodeSpec: &pb.ChaincodeSpec{ChaincodeId: chaincodeID}})
+}
+
+// TestAdminACLFail deploys tried to deploy a chaincode;
+// however we inject a special policy for admins to simulate
+// the scenario in which the creator of this proposal is not among
+// the admins for the chain
+func TestAdminACLFail(t *testing.T) {
+	//skip pending FAB-2457 fix
+	t.Skip()
+	chainID := util.GetTestChainID()
+
+	// here we inject a reject policy for admins
+	// to simulate the scenario in which the invoker
+	// is not authorized to issue this proposal
+	rejectpolicy := &mockpolicies.Policy{
+		Err: errors.New("The creator of this proposal does not fulfil the writers policy of this chain"),
+	}
+	pm := peer.GetPolicyManager(chainID)
+	pm.(*mockpolicies.Manager).PolicyMap = map[string]*mockpolicies.Policy{policies.ChannelApplicationAdmins: rejectpolicy}
+
+	var ctxt = context.Background()
+
+	url := "github.com/hyperledger/fabric/examples/chaincode/go/chaincode_example01"
+	chaincodeID := &pb.ChaincodeID{Path: url, Name: "ex01-fail1", Version: "0"}
+
+	defer deleteChaincodeOnDisk("ex01-fail1.0")
+
+	f := "init"
+	argsDeploy := util.ToChaincodeArgs(f, "a", "100", "b", "200")
+	spec := &pb.ChaincodeSpec{Type: 1, ChaincodeId: chaincodeID, Input: &pb.ChaincodeInput{Args: argsDeploy}}
+
+	cccid := ccprovider.NewCCContext(chainID, "ex01-fail1", "0", "", false, nil, nil)
+
+	_, _, err := deploy(endorserServer, chainID, spec, nil)
+	if err == nil {
+		t.Fail()
+		t.Logf("Deploying chaincode should have failed!")
+		chaincode.GetChain().Stop(ctxt, cccid, &pb.ChaincodeDeploymentSpec{ChaincodeSpec: &pb.ChaincodeSpec{ChaincodeId: chaincodeID}})
+		return
+	}
+
+	fmt.Println("TestAdminACLFail passed")
+	t.Logf("TestATestAdminACLFailCLFail passed")
+
+	chaincode.GetChain().Stop(ctxt, cccid, &pb.ChaincodeDeploymentSpec{ChaincodeSpec: &pb.ChaincodeSpec{ChaincodeId: chaincodeID}})
 }
 
 func newTempDir() string {

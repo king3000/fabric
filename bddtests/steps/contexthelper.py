@@ -44,7 +44,8 @@ class ContextHelper:
 
     def getTmpPathForName(self, name, extension=None, copyFromCache=False):
         'Returns the tmp path for a file, and a flag indicating if the file exists. Will also check in the cache and copy to tmp if copyFromCache==True'
-        slugifiedName = ".".join([slugify(name), extension]) if extension else slugify(name)
+        unicodeName = unicode(name)
+        slugifiedName = ".".join([slugify(unicodeName), extension]) if extension else slugify(unicodeName)
         tmpPath = os.path.join(self.getTmpProjectPath(), slugifiedName)
         fileExists = False
         if os.path.isfile(tmpPath):
@@ -71,15 +72,20 @@ class ContextHelper:
         return self.context.config.userdata.get(configName, "false") == "true"
 
     def before_scenario(self, scenario):
-        print("before_scenario: {0}".format(self))
+        # print("before_scenario: {0}".format(self))
+        pass
 
     def after_scenario(self, scenario):
-        print("after_scenario: {0}".format(self))
-
+        # print("after_scenario: {0}".format(self))
+        pass
 
     def before_step(self, step):
-        print("before_step: {0}".format(self))
-        print("")
+        # print("before_step: {0}".format(self))
+        pass
+
+    def after_step(self, step):
+        # print("after_step: {0}".format(self))
+        pass
 
     def registerComposition(self, composition):
         return composition

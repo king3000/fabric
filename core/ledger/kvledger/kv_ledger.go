@@ -80,11 +80,11 @@ func (l *kvLedger) recoverDBs() error {
 	recoverables := []recoverable{l.txtmgmt, l.historyDB}
 	recoverers := []*recoverer{}
 	for _, recoverable := range recoverables {
-		recover, firstBlockNum, err := recoverable.ShouldRecover(lastAvailableBlockNum)
+		recoverFlag, firstBlockNum, err := recoverable.ShouldRecover(lastAvailableBlockNum)
 		if err != nil {
 			return err
 		}
-		if recover {
+		if recoverFlag {
 			recoverers = append(recoverers, &recoverer{firstBlockNum, recoverable})
 		}
 	}
@@ -138,15 +138,13 @@ func (l *kvLedger) GetTransactionByID(txID string) (*peer.ProcessedTransaction, 
 		return nil, err
 	}
 
-	// Hardocde to Valid:true for now
-	processedTran := &peer.ProcessedTransaction{TransactionEnvelope: tranEnv, Valid: true}
+	txVResult, err := l.blockStore.RetrieveTxValidationCodeByTxID(txID)
 
-	// TODO subsequent changeset will retrieve validation bit array on the block to indicate
-	// whether the tran was validated or invalidated.  It is possible to retreive both the tran
-	// and the block (with bit array) from storage and combine the results.  But it would be
-	// more efficient to refactor block storage to retrieve the tran and the validation bit
-	// in one operation.
+	if err != nil {
+		return nil, err
+	}
 
+	processedTran := &peer.ProcessedTransaction{TransactionEnvelope: tranEnv, ValidationCode: int32(txVResult)}
 	return processedTran, nil
 }
 
@@ -180,6 +178,10 @@ func (l *kvLedger) GetBlockByTxID(txID string) (*common.Block, error) {
 	return l.blockStore.RetrieveBlockByTxID(txID)
 }
 
+func (l *kvLedger) GetTxValidationCodeByTxID(txID string) (peer.TxValidationCode, error) {
+	return l.blockStore.RetrieveTxValidationCodeByTxID(txID)
+}
+
 //Prune prunes the blocks/transactions that satisfy the given policy
 func (l *kvLedger) Prune(policy commonledger.PrunePolicy) error {
 	return errors.New("Not yet implemented")
@@ -210,25 +212,26 @@ func (l *kvLedger) Commit(block *common.Block) error {
 	var err error
 	blockNo := block.Header.Number
 
-	logger.Debugf("Validating block [%d]", blockNo)
+	logger.Debugf("Channel [%s]: Validating block [%d]", l.ledgerID, blockNo)
 	err = l.txtmgmt.ValidateAndPrepare(block, true)
 	if err != nil {
 		return err
 	}
 
-	logger.Debugf("Committing block [%d] to storage", blockNo)
+	logger.Debugf("Channel [%s]: Committing block [%d] to storage", l.ledgerID, blockNo)
 	if err = l.blockStore.AddBlock(block); err != nil {
 		return err
 	}
+	logger.Infof("Channel [%s]: Created block [%d] with %d transaction(s)", l.ledgerID, block.Header.Number, len(block.Data.Data))
 
-	logger.Debugf("Committing block [%d] transactions to state database", blockNo)
+	logger.Debugf("Channel [%s]: Committing block [%d] transactions to state database", l.ledgerID, blockNo)
 	if err = l.txtmgmt.Commit(); err != nil {
 		panic(fmt.Errorf(`Error during commit to txmgr:%s`, err))
 	}
 
 	// History database could be written in parallel with state and/or async as a future optimization
 	if ledgerconfig.IsHistoryDBEnabled() {
-		logger.Debugf("Committing block [%d] transactions to history database", blockNo)
+		logger.Debugf("Channel [%s]: Committing block [%d] transactions to history database", l.ledgerID, blockNo)
 		if err := l.historyDB.Commit(block); err != nil {
 			panic(fmt.Errorf(`Error during commit to history db:%s`, err))
 		}

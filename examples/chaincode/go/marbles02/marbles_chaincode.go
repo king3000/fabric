@@ -29,10 +29,48 @@ under the License.
 
 // ==== Query marbles ====
 // peer chaincode query -C myc1 -n marbles -c '{"Args":["readMarble","marble1"]}'
+// peer chaincode query -C myc1 -n marbles -c '{"Args":["getMarblesByRange","marble1","marble3"]}'
+// peer chaincode query -C myc1 -n marbles -c '{"Args":["getHistoryForMarble","marble1"]}'
 
 // Rich Query (Only supported if CouchDB is used as state database):
 //   peer chaincode query -C myc1 -n marbles -c '{"Args":["queryMarblesByOwner","tom"]}'
 //   peer chaincode query -C myc1 -n marbles -c '{"Args":["queryMarbles","{\"selector\":{\"owner\":\"tom\"}}"]}'
+
+//The following examples demonstrate creating indexes on CouchDB
+//Example hostname:port configurations
+//
+//Docker or vagrant environments:
+// http://couchdb:5984/
+//
+//Inside couchdb docker container
+// http://127.0.0.1:5984/
+
+// Index for chaincodeid, docType, owner.
+// Note that docType and owner fields must be prefixed with the "data" wrapper
+// chaincodeid must be added for all queries
+//
+// Definition for use with Fauxton interface
+// {"index":{"fields":["chaincodeid","data.docType","data.owner"]},"ddoc":"indexOwnerDoc", "name":"indexOwner","type":"json"}
+//
+// example curl definition for use with command line
+// curl -i -X POST -H "Content-Type: application/json" -d "{\"index\":{\"fields\":[\"chaincodeid\",\"data.docType\",\"data.owner\"]},\"name\":\"indexOwner\",\"ddoc\":\"indexOwnerDoc\",\"type\":\"json\"}" http://hostname:port/myc1/_index
+//
+
+// Index for chaincodeid, docType, owner, size (descending order).
+// Note that docType, owner and size fields must be prefixed with the "data" wrapper
+// chaincodeid must be added for all queries
+//
+// Definition for use with Fauxton interface
+// {"index":{"fields":[{"data.size":"desc"},{"chaincodeid":"desc"},{"data.docType":"desc"},{"data.owner":"desc"}]},"ddoc":"indexSizeSortDoc", "name":"indexSizeSortDesc","type":"json"}
+//
+// example curl definition for use with command line
+// curl -i -X POST -H "Content-Type: application/json" -d "{\"index\":{\"fields\":[{\"data.size\":\"desc\"},{\"chaincodeid\":\"desc\"},{\"data.docType\":\"desc\"},{\"data.owner\":\"desc\"}]},\"ddoc\":\"indexSizeSortDoc\", \"name\":\"indexSizeSortDesc\",\"type\":\"json\"}" http://hostname:port/myc1/_index
+
+// Rich Query with index design doc and index name specified (Only supported if CouchDB is used as state database):
+//   peer chaincode query -C myc1 -n marbles -c '{"Args":["queryMarbles","{\"selector\":{\"docType\":\"marble\",\"owner\":\"tom\"}, \"use_index\":[\"_design/indexOwnerDoc\", \"indexOwner\"]}"]}'
+
+// Rich Query with index design doc specified only (Only supported if CouchDB is used as state database):
+//   peer chaincode query -C myc1 -n marbles -c '{"Args":["queryMarbles","{\"selector\":{\"docType\":{\"$eq\":\"marble\"},\"owner\":{\"$eq\":\"tom\"},\"size\":{\"$gt\":0}},\"fields\":[\"docType\",\"owner\",\"size\"],\"sort\":[{\"size\":\"desc\"}],\"use_index\":\"_design/indexSizeSortDoc\"}"]}'
 
 package main
 
@@ -98,6 +136,8 @@ func (t *SimpleChaincode) Invoke(stub shim.ChaincodeStubInterface) pb.Response {
 		return t.queryMarbles(stub, args)
 	} else if function == "getHistoryForMarble" { //get history of values for a marble
 		return t.getHistoryForMarble(stub, args)
+	} else if function == "getMarblesByRange" { //get marbles based on range query
+		return t.getMarblesByRange(stub, args)
 	}
 
 	fmt.Println("invoke did not find func: " + function) //error
@@ -292,6 +332,64 @@ func (t *SimpleChaincode) transferMarble(stub shim.ChaincodeStubInterface, args 
 
 	fmt.Println("- end transferMarble (success)")
 	return shim.Success(nil)
+}
+
+// ===========================================================================================
+// getMarblesByRange performs a range query based on the start and end keys provided.
+
+// Read-only function results are not typically submitted to ordering. If the read-only
+// results are submitted to ordering, or if the query is used in an update transaction
+// and submitted to ordering, then the committing peers will re-execute to guarantee that
+// result sets are stable between endorsement time and commit time. The transaction is
+// invalidated by the committing peers if the result set has changed between endorsement
+// time and commit time.
+// Therefore, range queries are a safe option for performing update transactions based on query results.
+// ===========================================================================================
+func (t *SimpleChaincode) getMarblesByRange(stub shim.ChaincodeStubInterface, args []string) pb.Response {
+
+	if len(args) < 2 {
+		return shim.Error("Incorrect number of arguments. Expecting 2")
+	}
+
+	startKey := args[0]
+	endKey := args[1]
+
+	resultsIterator, err := stub.GetStateByRange(startKey, endKey)
+	if err != nil {
+		return shim.Error(err.Error())
+	}
+	defer resultsIterator.Close()
+
+	// buffer is a JSON array containing QueryResults
+	var buffer bytes.Buffer
+	buffer.WriteString("[")
+
+	bArrayMemberAlreadyWritten := false
+	for resultsIterator.HasNext() {
+		queryResultKey, queryResultValue, err := resultsIterator.Next()
+		if err != nil {
+			return shim.Error(err.Error())
+		}
+		// Add a comma before array members, suppress it for the first array member
+		if bArrayMemberAlreadyWritten == true {
+			buffer.WriteString(",")
+		}
+		buffer.WriteString("{\"Key\":")
+		buffer.WriteString("\"")
+		buffer.WriteString(queryResultKey)
+		buffer.WriteString("\"")
+
+		buffer.WriteString(", \"Record\":")
+		// Record is a JSON object, so we write as-is
+		buffer.WriteString(string(queryResultValue))
+		buffer.WriteString("}")
+		bArrayMemberAlreadyWritten = true
+	}
+	buffer.WriteString("]")
+
+	fmt.Printf("- getMarblesByRange queryResult:\n%s\n", buffer.String())
+
+	return shim.Success(buffer.Bytes())
 }
 
 // ==== Example: GetStateByPartialCompositeKey/RangeQuery =========================================

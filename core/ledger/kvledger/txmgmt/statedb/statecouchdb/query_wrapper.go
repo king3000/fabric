@@ -22,9 +22,12 @@ import (
 	"reflect"
 )
 
-var dataWrapper = "data"
-var jsonQueryFields = "fields"
-var jsonQuerySelector = "selector"
+const dataWrapper = "data"
+const jsonQueryFields = "fields"
+const jsonQuerySelector = "selector"
+const jsonQueryUseIndex = "use_index"
+const jsonQueryLimit = "limit"
+const jsonQuerySkip = "skip"
 
 var validOperators = []string{"$and", "$or", "$not", "$nor", "$all", "$elemMatch",
 	"$lt", "$lte", "$eq", "$ne", "$gte", "$gt", "$exits", "$type", "$in", "$nin",
@@ -37,7 +40,11 @@ All fields in the selector must have "data." prepended to the field names
 Fields listed in fields key will have "data." prepended
 Fields in the sort key will have "data." prepended
 
-Also,  the query will be scoped to the chaincodeid if the contextID is supplied
+- The query will be scoped to the chaincodeid
+
+- limit be added to the query and is based on config
+- skip is defaulted to 0 and is currently not used, this is for future paging implementation
+
 In the example a contextID of "marble" is assumed.
 
 Example:
@@ -45,7 +52,7 @@ Example:
 Source Query:
 {"selector":{"owner": {"$eq": "tom"}},
 "fields": ["owner", "asset_name", "color", "size"],
-"sort": ["size", "color"], "limit": 10, "skip": 0}
+"sort": ["size", "color"]}
 
 Result Wrapped Query:
 {"selector":{"$and":[{"chaincodeid":"marble"},{"data.owner":{"$eq":"tom"}}]},
@@ -53,7 +60,7 @@ Result Wrapped Query:
 "sort":["data.size","data.color"],"limit":10,"skip":0}
 
 */
-func ApplyQueryWrapper(namespace, queryString string) (string, error) {
+func ApplyQueryWrapper(namespace, queryString string, queryLimit, querySkip int) (string, error) {
 
 	//create a generic map for the query json
 	jsonQueryMap := make(map[string]interface{})
@@ -67,13 +74,12 @@ func ApplyQueryWrapper(namespace, queryString string) (string, error) {
 	//traverse through the json query and wrap any field names
 	processAndWrapQuery(jsonQueryMap)
 
-	//if "fields" are specified in the query, the add the "_id", "version" and "chaincodeid" fields
+	//if "fields" are specified in the query, then add the "_id", "version" and "chaincodeid" fields
 	if jsonValue, ok := jsonQueryMap[jsonQueryFields]; ok {
 		//check to see if this is an interface map
 		if reflect.TypeOf(jsonValue).String() == "[]interface {}" {
 
-			//Add the "_id" and "version" fields,  these are needed by default
-			//Overwrite the query fields if the "_id" field has been added
+			//Add the "_id", "version" and "chaincodeid" fields,  these are needed by default
 			jsonQueryMap[jsonQueryFields] = append(jsonValue.([]interface{}),
 				"_id", "version", "chaincodeid")
 		}
@@ -87,6 +93,12 @@ func ApplyQueryWrapper(namespace, queryString string) (string, error) {
 		//if the "selector" is not found, then add a default namespace filter
 		setDefaultNamespaceInSelector(namespace, jsonQueryMap)
 	}
+
+	//Add limit
+	jsonQueryMap[jsonQueryLimit] = queryLimit
+
+	//Add skip
+	jsonQueryMap[jsonQuerySkip] = querySkip
 
 	//Marshal the updated json query
 	editedQuery, _ := json.Marshal(jsonQueryMap)
@@ -142,7 +154,7 @@ func setDefaultNamespaceInSelector(namespace string, jsonQueryMap map[string]int
 func processAndWrapQuery(jsonQueryMap map[string]interface{}) {
 
 	//iterate through the JSON query
-	for _, jsonValue := range jsonQueryMap {
+	for jsonKey, jsonValue := range jsonQueryMap {
 
 		//create a case for the data types found in the JSON query
 		switch jsonValueType := jsonValue.(type) {
@@ -165,8 +177,11 @@ func processAndWrapQuery(jsonQueryMap map[string]interface{}) {
 
 				case string:
 
-					//This is a simple string, so wrap the field and replace in the array
-					jsonValueType[itemKey] = fmt.Sprintf("%v.%v", dataWrapper, itemValue)
+					//if this is not "use_index", the wrap the string
+					if jsonKey != jsonQueryUseIndex {
+						//This is a simple string, so wrap the field and replace in the array
+						jsonValueType[itemKey] = fmt.Sprintf("%v.%v", dataWrapper, itemValue)
+					}
 
 				case []interface{}:
 
@@ -194,8 +209,14 @@ func processAndWrapQuery(jsonQueryMap map[string]interface{}) {
 //the next level of the json query
 func processInterfaceMap(jsonFragment map[string]interface{}) {
 
-	//iterate the the item in the map
+	//create a copy of the jsonFragment for iterating
+	var bufferFragment = make(map[string]interface{})
 	for keyVal, itemVal := range jsonFragment {
+		bufferFragment[keyVal] = itemVal
+	}
+
+	//iterate the the item in the map
+	for keyVal, itemVal := range bufferFragment {
 
 		//check to see if the key is an operator
 		if arrayContains(validOperators, keyVal) {

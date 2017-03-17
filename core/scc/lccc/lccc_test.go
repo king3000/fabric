@@ -26,6 +26,11 @@ import (
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/common/sysccprovider"
 	//"github.com/hyperledger/fabric/core/container"
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+
+	"github.com/hyperledger/fabric/core/container/util"
 	pb "github.com/hyperledger/fabric/protos/peer"
 )
 
@@ -56,9 +61,19 @@ func register(stub *shim.MockStub, ccname string) error {
 func constructDeploymentSpec(name string, path string, version string, initArgs [][]byte, createFS bool) (*pb.ChaincodeDeploymentSpec, error) {
 	spec := &pb.ChaincodeSpec{Type: 1, ChaincodeId: &pb.ChaincodeID{Name: name, Path: path, Version: version}, Input: &pb.ChaincodeInput{Args: initArgs}}
 
-	codePackageBytes := []byte(name + path + version)
+	codePackageBytes := bytes.NewBuffer(nil)
+	gz := gzip.NewWriter(codePackageBytes)
+	tw := tar.NewWriter(gz)
 
-	chaincodeDeploymentSpec := &pb.ChaincodeDeploymentSpec{ChaincodeSpec: spec, CodePackage: codePackageBytes}
+	err := util.WriteBytesToPackage("src/garbage.go", []byte(name+path+version), tw)
+	if err != nil {
+		return nil, err
+	}
+
+	tw.Close()
+	gz.Close()
+
+	chaincodeDeploymentSpec := &pb.ChaincodeDeploymentSpec{ChaincodeSpec: spec, CodePackage: codePackageBytes.Bytes()}
 
 	if createFS {
 		err := ccprovider.PutChaincodeIntoFS(chaincodeDeploymentSpec)
@@ -80,7 +95,13 @@ func TestDeploy(t *testing.T) {
 		t.FailNow()
 	}
 
-	cds, err := constructDeploymentSpec("example02", "github.com/hyperledger/fabric/examples/chaincode/go/chaincode_example02", "0", [][]byte{[]byte("init"), []byte("a"), []byte("100"), []byte("b"), []byte("200")}, true)
+	ccname := "example02"
+	path := "github.com/hyperledger/fabric/examples/chaincode/go/chaincode_example02"
+	version := "0"
+	cds, err := constructDeploymentSpec(ccname, path, version, [][]byte{[]byte("init"), []byte("a"), []byte("100"), []byte("b"), []byte("200")}, true)
+	if err != nil {
+		t.FailNow()
+	}
 	defer os.Remove(lccctestpath + "/example02.0")
 	var b []byte
 	if b, err = proto.Marshal(cds); err != nil || b == nil {
@@ -89,6 +110,27 @@ func TestDeploy(t *testing.T) {
 
 	args := [][]byte{[]byte(DEPLOY), []byte("test"), b}
 	if res := stub.MockInvoke("1", args); res.Status != shim.OK {
+		t.FailNow()
+	}
+
+	args = [][]byte{[]byte(GETCHAINCODES)}
+	res := stub.MockInvoke("1", args)
+	if res.Status != shim.OK {
+		t.FailNow()
+	}
+
+	cqr := &pb.ChaincodeQueryResponse{}
+	err = proto.Unmarshal(res.Payload, cqr)
+	if err != nil {
+		t.FailNow()
+	}
+	// deployed one chaincode so query should return an array with one chaincode
+	if len(cqr.GetChaincodes()) != 1 {
+		t.FailNow()
+	}
+
+	// check that the ChaincodeInfo values match the input values
+	if cqr.GetChaincodes()[0].Name != ccname || cqr.GetChaincodes()[0].Version != version || cqr.GetChaincodes()[0].Path != path {
 		t.FailNow()
 	}
 }
@@ -102,17 +144,41 @@ func TestInstall(t *testing.T) {
 		fmt.Println("Init failed", string(res.Message))
 		t.FailNow()
 	}
-
-	cds, err := constructDeploymentSpec("example02", "github.com/hyperledger/fabric/examples/chaincode/go/chaincode_example02", "0", [][]byte{[]byte("init"), []byte("a"), []byte("100"), []byte("b"), []byte("200")}, false)
+	ccname := "example02"
+	path := "github.com/hyperledger/fabric/examples/chaincode/go/chaincode_example02"
+	version := "0"
+	cds, err := constructDeploymentSpec(ccname, path, version, [][]byte{[]byte("init"), []byte("a"), []byte("100"), []byte("b"), []byte("200")}, false)
 	var b []byte
 	if b, err = proto.Marshal(cds); err != nil || b == nil {
 		t.FailNow()
 	}
 
-	//constructDeploymentSpec puts the depspec on the FS. This should fail
+	//constructDeploymentSpec puts the depspec on the FS. This should succeed
 	args := [][]byte{[]byte(INSTALL), b}
 	defer os.Remove(lccctestpath + "/example02.0")
 	if res := stub.MockInvoke("1", args); res.Status != shim.OK {
+		t.FailNow()
+	}
+
+	args = [][]byte{[]byte(GETINSTALLEDCHAINCODES)}
+	res := stub.MockInvoke("1", args)
+	if res.Status != shim.OK {
+		t.FailNow()
+	}
+
+	cqr := &pb.ChaincodeQueryResponse{}
+	err = proto.Unmarshal(res.Payload, cqr)
+	if err != nil {
+		t.FailNow()
+	}
+
+	// installed one chaincode so query should return an array with one chaincode
+	if len(cqr.GetChaincodes()) != 1 {
+		t.FailNow()
+	}
+
+	// check that the ChaincodeInfo values match the input values
+	if cqr.GetChaincodes()[0].Name != ccname || cqr.GetChaincodes()[0].Version != version || cqr.GetChaincodes()[0].Path != path {
 		t.FailNow()
 	}
 }
@@ -155,9 +221,8 @@ func TestInvalidCodeDeploy(t *testing.T) {
 	baddepspec := []byte("bad deploy spec")
 	args := [][]byte{[]byte(DEPLOY), []byte("test"), baddepspec}
 	res := stub.MockInvoke("1", args)
-	expectErr := InvalidDeploymentSpecErr("unexpected EOF")
-	if string(res.Message) != expectErr.Error() {
-		t.Logf("get result: %+v", res)
+	if res.Status == shim.OK {
+		t.Logf("Expected failure")
 		t.FailNow()
 	}
 }
@@ -329,6 +394,24 @@ func TestMultipleDeploy(t *testing.T) {
 	if res := stub.MockInvoke("1", args); res.Status != shim.OK {
 		t.FailNow()
 	}
+
+	args = [][]byte{[]byte(GETCHAINCODES)}
+	res := stub.MockInvoke("1", args)
+	if res.Status != shim.OK {
+		t.FailNow()
+	}
+
+	cqr := &pb.ChaincodeQueryResponse{}
+	err = proto.Unmarshal(res.Payload, cqr)
+	if err != nil {
+		t.FailNow()
+	}
+
+	// deployed two chaincodes so query should return an array with two chaincodes
+	if len(cqr.GetChaincodes()) != 2 {
+		t.FailNow()
+	}
+
 }
 
 //TestRetryFailedDeploy tests re-deploying after a failure
@@ -496,6 +579,45 @@ func TestGetAPIsWithoutInstall(t *testing.T) {
 	if res := stub.MockInvoke("1", args); res.Status == shim.OK {
 		t.FailNow()
 	}
+
+	// get instantiated chaincodes
+	args = [][]byte{[]byte(GETCHAINCODES)}
+	res := stub.MockInvoke("1", args)
+	if res.Status != shim.OK {
+		t.FailNow()
+	}
+
+	cqr := &pb.ChaincodeQueryResponse{}
+	err = proto.Unmarshal(res.Payload, cqr)
+	if err != nil {
+		t.FailNow()
+	}
+
+	// one chaincode instantiated so query should return an array with one
+	// chaincode
+	if len(cqr.GetChaincodes()) != 1 {
+		t.FailNow()
+	}
+
+	// get installed chaincodes
+	args = [][]byte{[]byte(GETINSTALLEDCHAINCODES)}
+	res = stub.MockInvoke("1", args)
+	if res.Status != shim.OK {
+		t.FailNow()
+	}
+
+	cqr = &pb.ChaincodeQueryResponse{}
+	err = proto.Unmarshal(res.Payload, cqr)
+	if err != nil {
+		t.FailNow()
+	}
+
+	// no chaincodes installed to FS so query should return an array with zero
+	// chaincodes
+	if len(cqr.GetChaincodes()) != 0 {
+		t.FailNow()
+	}
+
 }
 
 func TestMain(m *testing.M) {

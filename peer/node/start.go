@@ -24,11 +24,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
-	"github.com/hyperledger/fabric/common/configtx/test"
-	"github.com/hyperledger/fabric/common/genesis"
+	genesisconfig "github.com/hyperledger/fabric/common/configtx/tool/localconfig"
+	"github.com/hyperledger/fabric/common/configtx/tool/provisional"
+	"github.com/hyperledger/fabric/common/localmsp"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core"
 	"github.com/hyperledger/fabric/core/chaincode"
@@ -42,6 +44,7 @@ import (
 	"github.com/hyperledger/fabric/msp/mgmt"
 	"github.com/hyperledger/fabric/peer/common"
 	"github.com/hyperledger/fabric/peer/gossip/mcs"
+	cb "github.com/hyperledger/fabric/protos/common"
 	pb "github.com/hyperledger/fabric/protos/peer"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -51,6 +54,13 @@ import (
 
 var chaincodeDevMode bool
 var peerDefaultChain bool
+var orderingEndpoint string
+
+// XXXDefaultChannelMSPID should not be defined in production code
+// It should only be referenced in tests.  However, it is necessary
+// to support the 'default chain' setup so temporarilly adding until
+// this concept can be removed to testing scenarios only
+const XXXDefaultChannelMSPID = "DEFAULT"
 
 func startCmd() *cobra.Command {
 	// Set the flags on the node start command.
@@ -59,6 +69,7 @@ func startCmd() *cobra.Command {
 		"Whether peer in chaincode development mode")
 	flags.BoolVarP(&peerDefaultChain, "peer-defaultchain", "", true,
 		"Whether to start peer with chain testchainid")
+	flags.StringVarP(&orderingEndpoint, "orderer", "o", "orderer:7050", "Ordering service endpoint")
 
 	return nodeStartCmd
 }
@@ -103,26 +114,20 @@ func serve(args []string) error {
 
 	listenAddr := viper.GetString("peer.listenAddress")
 
-	if "" == listenAddr {
-		logger.Debug("Listen address not specified, using peer endpoint address")
-		listenAddr = peerEndpoint.Address
-	}
-
-	lis, err := net.Listen("tcp", listenAddr)
+	secureConfig, err := peer.GetSecureConfig()
 	if err != nil {
-		grpclog.Fatalf("Failed to listen: %v", err)
+		logger.Fatalf("Error loading secure config for peer (%s)", err)
 	}
-
-	logger.Infof("Security enabled status: %t", core.SecurityEnabled())
-
-	//Create GRPC server - return if an error occurs
-	secureConfig := comm.SecureServerConfig{
-		UseTLS: viper.GetBool("peer.tls.enabled"),
-	}
-	grpcServer, err := comm.NewGRPCServerFromListener(lis, secureConfig)
+	peerServer, err := peer.CreatePeerServer(listenAddr, secureConfig)
 	if err != nil {
-		fmt.Println("Failed to return new GRPC server: ", err)
-		return err
+		logger.Fatalf("Failed to create peer server (%s)", err)
+	}
+
+	if secureConfig.UseTLS {
+		logger.Info("Starting peer with TLS enabled")
+		// set up CA support
+		caSupport := comm.GetCASupport()
+		caSupport.ServerRootCAs = secureConfig.ServerRootCAs
 	}
 
 	//TODO - do we need different SSL material for events ?
@@ -131,27 +136,30 @@ func serve(args []string) error {
 		grpclog.Fatalf("Failed to create ehub server: %v", err)
 	}
 
-	registerChaincodeSupport(grpcServer.Server())
+	registerChaincodeSupport(peerServer.Server())
 
 	logger.Debugf("Running peer")
 
 	// Register the Admin server
-	pb.RegisterAdminServer(grpcServer.Server(), core.NewAdminServer())
+	pb.RegisterAdminServer(peerServer.Server(), core.NewAdminServer())
 
 	// Register the Endorser server
 	serverEndorser := endorser.NewEndorserServer()
-	pb.RegisterEndorserServer(grpcServer.Server(), serverEndorser)
+	pb.RegisterEndorserServer(peerServer.Server(), serverEndorser)
 
 	// Initialize gossip component
 	bootstrap := viper.GetStringSlice("peer.gossip.bootstrap")
 
 	serializedIdentity, err := mgmt.GetLocalSigningIdentityOrPanic().Serialize()
 	if err != nil {
-		panic(fmt.Sprintf("Failed serializing self identity: %v", err))
+		logger.Panicf("Failed serializing self identity: %v", err)
 	}
 
-	messageCryptoService := mcs.New(peer.GetPolicyManagerMgmt())
-	service.InitGossipService(serializedIdentity, peerEndpoint.Address, grpcServer.Server(), messageCryptoService, bootstrap...)
+	messageCryptoService := mcs.New(
+		peer.NewChannelPolicyManagerGetter(),
+		localmsp.NewSigner(),
+		mgmt.NewDeserializersManager())
+	service.InitGossipService(serializedIdentity, peerEndpoint.Address, peerServer.Server(), messageCryptoService, bootstrap...)
 	defer service.GetGossipService().Stop()
 
 	//initialize system chaincodes
@@ -159,14 +167,31 @@ func serve(args []string) error {
 
 	// Begin startup of default chain
 	if peerDefaultChain {
+		if orderingEndpoint == "" {
+			logger.Panic("No ordering service endpoint provided, please use -o option.")
+		}
+
+		if len(strings.Split(orderingEndpoint, ":")) != 2 {
+			logger.Panicf("Invalid format of ordering service endpoint, %s.", orderingEndpoint)
+		}
+
 		chainID := util.GetTestChainID()
 
-		// We create a genesis block for the test
-		// chain with its MSP so that we can transact
-		block, err := genesis.NewFactoryImpl(test.ApplicationOrgTemplate()).Block(chainID)
-		if nil != err {
-			panic(fmt.Sprintf("Unable to create genesis block for [%s] due to [%s]", chainID, err))
-		}
+		var block *cb.Block
+
+		func() {
+			defer func() {
+				if err := recover(); err != nil {
+					logger.Fatalf("Peer configured to start with the default test chain, but supporting configuration files did not match.  Please ensure that configtx.yaml contains the unmodified SampleSingleMSPSolo profile and that msp/sampleconfig is present.\n%s", err)
+				}
+			}()
+
+			genConf := genesisconfig.Load(genesisconfig.SampleSingleMSPSoloProfile)
+			genConf.Orderer.Addresses = []string{orderingEndpoint}
+			genConf.Application.Organizations[0].Name = XXXDefaultChannelMSPID
+			genConf.Application.Organizations[0].ID = XXXDefaultChannelMSPID
+			block = provisional.New(genConf).GenesisBlockForChannel(chainID)
+		}()
 
 		//this creates testchainid and sets up gossip
 		if err = peer.CreateChainFromBlock(block); err == nil {
@@ -184,7 +209,7 @@ func serve(args []string) error {
 		scc.DeploySysCCs(cid)
 	})
 
-	logger.Infof("Starting peer with ID=%s, network ID=%s, address=%s",
+	logger.Infof("Starting peer with ID=[%s], network ID=[%s], address=[%s]",
 		peerEndpoint.Id, viper.GetString("peer.networkId"), peerEndpoint.Address)
 
 	// Start the grpc server. Done in a goroutine so we can deploy the
@@ -202,10 +227,10 @@ func serve(args []string) error {
 
 	go func() {
 		var grpcErr error
-		if grpcErr = grpcServer.Start(); grpcErr != nil {
+		if grpcErr = peerServer.Start(); grpcErr != nil {
 			grpcErr = fmt.Errorf("grpc server exited with error: %s", grpcErr)
 		} else {
-			logger.Info("grpc server exited")
+			logger.Info("peer server exited")
 		}
 		serve <- grpcErr
 	}()
@@ -229,6 +254,9 @@ func serve(args []string) error {
 			}
 		}()
 	}
+
+	logger.Infof("Started peer with ID=[%s], network ID=[%s], address=[%s]",
+		peerEndpoint.Id, viper.GetString("peer.networkId"), peerEndpoint.Address)
 
 	// sets the logging level for the 'error' and 'msp' modules to the
 	// values from core.yaml. they can also be updated dynamically using

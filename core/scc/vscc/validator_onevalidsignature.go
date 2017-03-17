@@ -69,7 +69,7 @@ func (vscc *ValidatorOneValidSignature) Invoke(stub shim.ChaincodeStubInterface)
 		return shim.Error("No policy supplied")
 	}
 
-	logger.Infof("VSCC invoked")
+	logger.Debugf("VSCC invoked")
 
 	// get the envelope...
 	env, err := utils.GetEnvelopeFromBlock(args[1])
@@ -93,7 +93,7 @@ func (vscc *ValidatorOneValidSignature) Invoke(stub shim.ChaincodeStubInterface)
 	// get the policy
 	mgr := mspmgmt.GetManagerForChain(chdr.ChannelId)
 	pProvider := cauthdsl.NewPolicyProvider(mgr)
-	policy, err := pProvider.NewPolicy(args[2])
+	policy, _, err := pProvider.NewPolicy(args[2])
 	if err != nil {
 		logger.Errorf("VSCC error: pProvider.NewPolicy failed, err %s", err)
 		return shim.Error(err.Error())
@@ -144,7 +144,7 @@ func (vscc *ValidatorOneValidSignature) Invoke(stub shim.ChaincodeStubInterface)
 		}
 	}
 
-	logger.Infof("VSCC exists successfully")
+	logger.Debugf("VSCC exists successfully")
 
 	return shim.Success(nil)
 }

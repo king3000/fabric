@@ -27,8 +27,13 @@ import (
 
 // TestBasicRW tests basic read-write
 func TestBasicRW(t *testing.T, dbProvider statedb.VersionedDBProvider) {
-	db, err := dbProvider.GetDBHandle("TestDB")
+	db, err := dbProvider.GetDBHandle("testbasicrw")
 	testutil.AssertNoError(t, err, "")
+
+	// Test that savepoint is nil for a new state db
+	sp, err := db.GetLatestSavePoint()
+	testutil.AssertNoError(t, err, "Error upon GetLatestSavePoint()")
+	testutil.AssertNil(t, sp)
 
 	// Test retrieval of non-existent key - returns nil rather than error
 	// For more details see https://github.com/hyperledger-archives/fabric/issues/936.
@@ -54,17 +59,17 @@ func TestBasicRW(t *testing.T, dbProvider statedb.VersionedDBProvider) {
 	vv, _ = db.GetState("ns2", "key4")
 	testutil.AssertEquals(t, vv, &vv4)
 
-	sp, err := db.GetLatestSavePoint()
+	sp, err = db.GetLatestSavePoint()
 	testutil.AssertNoError(t, err, "")
 	testutil.AssertEquals(t, sp, savePoint)
 }
 
 // TestMultiDBBasicRW tests basic read-write on multiple dbs
 func TestMultiDBBasicRW(t *testing.T, dbProvider statedb.VersionedDBProvider) {
-	db1, err := dbProvider.GetDBHandle("TestDB1")
+	db1, err := dbProvider.GetDBHandle("testmultidbbasicrw")
 	testutil.AssertNoError(t, err, "")
 
-	db2, err := dbProvider.GetDBHandle("TestDB2")
+	db2, err := dbProvider.GetDBHandle("testmultidbbasicrw2")
 	testutil.AssertNoError(t, err, "")
 
 	batch1 := statedb.NewUpdateBatch()
@@ -100,7 +105,7 @@ func TestMultiDBBasicRW(t *testing.T, dbProvider statedb.VersionedDBProvider) {
 
 // TestDeletes tests deteles
 func TestDeletes(t *testing.T, dbProvider statedb.VersionedDBProvider) {
-	db, err := dbProvider.GetDBHandle("TestDB")
+	db, err := dbProvider.GetDBHandle("testdeletes")
 	testutil.AssertNoError(t, err, "")
 
 	batch := statedb.NewUpdateBatch()
@@ -135,7 +140,7 @@ func TestDeletes(t *testing.T, dbProvider statedb.VersionedDBProvider) {
 
 // TestIterator tests the iterator
 func TestIterator(t *testing.T, dbProvider statedb.VersionedDBProvider) {
-	db, err := dbProvider.GetDBHandle("TestDB")
+	db, err := dbProvider.GetDBHandle("testiterator")
 	testutil.AssertNoError(t, err, "")
 	db.Open()
 	defer db.Close()
@@ -178,7 +183,7 @@ func testItr(t *testing.T, itr statedb.ResultsIterator, expectedKeys []string) {
 
 // TestQuery tests queries
 func TestQuery(t *testing.T, dbProvider statedb.VersionedDBProvider) {
-	db, err := dbProvider.GetDBHandle("TestDB")
+	db, err := dbProvider.GetDBHandle("testquery")
 	testutil.AssertNoError(t, err, "")
 	db.Open()
 	defer db.Close()

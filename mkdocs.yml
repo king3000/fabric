@@ -69,13 +69,6 @@ pages:
 
 - Getting Help:
   - Troubleshooting: troubleshooting.md
-  - FAQs:
-    - Architecture: FAQ/architecture_FAQ.md
-    - Chaincode: FAQ/chaincode_FAQ.md
-    - Confidentiality: FAQ/confidentiality_FAQ.md
-    - Consensus: FAQ/consensus_FAQ.md
-    - Identity: FAQ/identity_management_FAQ.md
-    - Usage: FAQ/usage_FAQ.md
 
 - Appendix:
   - Release notes: releases.md
@@ -95,7 +88,7 @@ pages:
     - Golang: Style-guides/go-style.md
   - Still Have Questions?: questions.md
   - Criteria on quality: quality.md
-  - Incubation notice: incubation.md
+  - Status: status.md
   - License: license.md
 
 markdown_extensions:

@@ -25,6 +25,7 @@ import (
 
 	pb "github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/core/committer"
+	"github.com/hyperledger/fabric/gossip/api"
 	"github.com/hyperledger/fabric/gossip/comm"
 	common2 "github.com/hyperledger/fabric/gossip/common"
 	"github.com/hyperledger/fabric/gossip/gossip"
@@ -47,10 +48,6 @@ type GossipStateProvider interface {
 	Stop()
 }
 
-var remoteStateMsgFilter = func(message interface{}) bool {
-	return message.(proto.ReceivedMessage).GetGossipMessage().IsRemoteStateMessage()
-}
-
 const (
 	defPollingPeriod       = 200 * time.Millisecond
 	defAntiEntropyInterval = 10 * time.Second
@@ -60,6 +57,9 @@ const (
 // the struct to handle in memory sliding window of
 // new ledger block to be acquired by hyper ledger
 type GossipStateProviderImpl struct {
+	// MessageCryptoService
+	mcs api.MessageCryptoService
+
 	// Chain id
 	chainID string
 
@@ -87,7 +87,7 @@ type GossipStateProviderImpl struct {
 }
 
 // NewGossipStateProvider creates initialized instance of gossip state provider
-func NewGossipStateProvider(chainID string, g gossip.Gossip, committer committer.Committer) GossipStateProvider {
+func NewGossipStateProvider(chainID string, g gossip.Gossip, committer committer.Committer, mcs api.MessageCryptoService) GossipStateProvider {
 	logger := util.GetLogger(util.LoggingStateModule, "")
 
 	gossipChan, _ := g.Accept(func(message interface{}) bool {
@@ -96,10 +96,35 @@ func NewGossipStateProvider(chainID string, g gossip.Gossip, committer committer
 			bytes.Equal(message.(*proto.GossipMessage).Channel, []byte(chainID))
 	}, false)
 
+	remoteStateMsgFilter := func(message interface{}) bool {
+		receivedMsg := message.(proto.ReceivedMessage)
+		msg := receivedMsg.GetGossipMessage()
+		if !msg.IsRemoteStateMessage() {
+			return false
+		}
+		// If we're not running with authentication, no point
+		// in enforcing access control
+		if !receivedMsg.GetConnectionInfo().IsAuthenticated() {
+			return true
+		}
+		connInfo := receivedMsg.GetConnectionInfo()
+		authErr := mcs.VerifyByChannel(msg.Channel, connInfo.Identity, connInfo.Auth.Signature, connInfo.Auth.SignedData)
+		if authErr != nil {
+			logger.Warning("Got unauthorized state transfer request from", string(connInfo.Identity))
+			return false
+		}
+		return true
+	}
+
 	// Filter message which are only relevant for state transfer
 	_, commChan := g.Accept(remoteStateMsgFilter, true)
 
 	height, err := committer.LedgerHeight()
+	if height == 0 {
+		// Panic here since this is an indication of invalid situation which should not happen in normal
+		// code path.
+		logger.Panic("Committer height cannot be zero, ledger should include at least one block (genesis).")
+	}
 
 	if err != nil {
 		logger.Error("Could not read ledger info to obtain current ledger height due to: ", err)
@@ -109,6 +134,10 @@ func NewGossipStateProvider(chainID string, g gossip.Gossip, committer committer
 	}
 
 	s := &GossipStateProviderImpl{
+		// MessageCryptoService
+		mcs: mcs,
+
+		// Chain ID
 		chainID: chainID,
 
 		// Instance of the gossip
@@ -237,6 +266,10 @@ func (s *GossipStateProviderImpl) handleStateResponse(msg proto.ReceivedMessage)
 	response := msg.GetGossipMessage().GetStateResponse()
 	for _, payload := range response.GetPayloads() {
 		s.logger.Debugf("Received payload with sequence number %d.", payload.SeqNum)
+		if err := s.mcs.VerifyBlock(common2.ChainID(s.chainID), payload.Data); err != nil {
+			s.logger.Warningf("Error verifying block with sequence number %d, due to %s", payload.SeqNum, err)
+			return
+		}
 		err := s.payloads.Push(payload)
 		if err != nil {
 			s.logger.Warningf("Payload with sequence number %d was received earlier", payload.SeqNum)
@@ -409,6 +442,6 @@ func (s *GossipStateProviderImpl) commitBlock(block *common.Block, seqNum uint64
 		s.logger.Errorf("Unable to serialize node meta state, error = %s", err)
 	}
 
-	s.logger.Debug("Commit success, created a block!")
+	s.logger.Debugf("Channel [%s]: Created block [%d] with %d transaction(s)", s.chainID, block.Header.Number, len(block.Data.Data))
 	return nil
 }

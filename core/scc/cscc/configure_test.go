@@ -24,13 +24,14 @@ import (
 
 	"github.com/golang/protobuf/proto"
 	configtxtest "github.com/hyperledger/fabric/common/configtx/test"
-	mockpolicies "github.com/hyperledger/fabric/common/mocks/policies"
+	"github.com/hyperledger/fabric/common/localmsp"
 	"github.com/hyperledger/fabric/core/chaincode"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 	"github.com/hyperledger/fabric/core/deliverservice"
 	"github.com/hyperledger/fabric/core/deliverservice/blocksprovider"
 	"github.com/hyperledger/fabric/core/ledger/ledgermgmt"
 	"github.com/hyperledger/fabric/core/peer"
+	"github.com/hyperledger/fabric/gossip/api"
 	"github.com/hyperledger/fabric/gossip/service"
 	"github.com/hyperledger/fabric/msp/mgmt"
 	"github.com/hyperledger/fabric/msp/mgmt/testtools"
@@ -46,10 +47,15 @@ import (
 type mockDeliveryClient struct {
 }
 
-// JoinChain once peer joins the chain it should need to check whenever
-// it has been selected as a leader and open connection to the configured
-// ordering service endpoint
-func (*mockDeliveryClient) JoinChain(chainID string, ledgerInfo blocksprovider.LedgerInfo) error {
+// StartDeliverForChannel dynamically starts delivery of new blocks from ordering service
+// to channel peers.
+func (ds *mockDeliveryClient) StartDeliverForChannel(chainID string, ledgerInfo blocksprovider.LedgerInfo) error {
+	return nil
+}
+
+// StopDeliverForChannel dynamically stops delivery of new blocks from ordering service
+// to channel peers.
+func (ds *mockDeliveryClient) StopDeliverForChannel(chainID string) error {
 	return nil
 }
 
@@ -61,7 +67,7 @@ func (*mockDeliveryClient) Stop() {
 type mockDeliveryClientFactory struct {
 }
 
-func (*mockDeliveryClientFactory) Service(g service.GossipService) (deliverclient.DeliverService, error) {
+func (*mockDeliveryClientFactory) Service(g service.GossipService, endpoints []string, mcs api.MessageCryptoService) (deliverclient.DeliverService, error) {
 	return &mockDeliveryClient{}, nil
 }
 
@@ -147,7 +153,7 @@ func TestConfigerInvokeJoinChainCorrectParams(t *testing.T) {
 
 	msptesttools.LoadMSPSetupForTesting("../../../msp/sampleconfig")
 	identity, _ := mgmt.GetLocalSigningIdentityOrPanic().Serialize()
-	messageCryptoService := mcs.New(&mockpolicies.PolicyManagerMgmt{})
+	messageCryptoService := mcs.New(&mcs.MockChannelPolicyManagerGetter{}, localmsp.NewSigner(), mgmt.NewDeserializersManager())
 	service.InitGossipServiceCustomDeliveryFactory(identity, "localhost:13611", grpcServer, &mockDeliveryClientFactory{}, messageCryptoService)
 
 	// Successful path for JoinChain
@@ -169,6 +175,24 @@ func TestConfigerInvokeJoinChainCorrectParams(t *testing.T) {
 	args = [][]byte{[]byte("GetConfigBlock"), []byte(chainID)}
 	if res := stub.MockInvoke("1", args); res.Status != shim.OK {
 		t.Fatalf("cscc invoke GetConfigBlock failed with: %v", err)
+	}
+
+	// get channels for the peer
+	args = [][]byte{[]byte(GetChannels)}
+	res := stub.MockInvoke("1", args)
+	if res.Status != shim.OK {
+		t.FailNow()
+	}
+
+	cqr := &pb.ChannelQueryResponse{}
+	err = proto.Unmarshal(res.Payload, cqr)
+	if err != nil {
+		t.FailNow()
+	}
+
+	// peer joined one channel so query should return an array with one channel
+	if len(cqr.GetChannels()) != 1 {
+		t.FailNow()
 	}
 }
 
