@@ -70,7 +70,6 @@ type gossipServiceImpl struct {
 	chanState         *channelState
 	disSecAdap        *discoverySecurityAdapter
 	mcs               api.MessageCryptoService
-	aliveMsgStore     msgstore.MessageStore
 	stateInfoMsgStore msgstore.MessageStore
 }
 
@@ -109,8 +108,6 @@ func NewGossipService(conf *Config, s *grpc.Server, secAdvisor api.SecurityAdvis
 		stopSignal:            &sync.WaitGroup{},
 		includeIdentityPeriod: time.Now().Add(conf.PublishCertPeriod),
 	}
-
-	g.aliveMsgStore = msgstore.NewMessageStore(proto.NewGossipMessageComparator(0), func(m interface{}) {})
 
 	g.chanState = newChannelState(g)
 	g.emitter = newBatchingEmitter(conf.PropagateIterations,
@@ -175,7 +172,13 @@ func (g *gossipServiceImpl) JoinChan(joinMsg api.JoinChannelMessage, chainID com
 	// joinMsg is supposed to have been already verified
 	g.chanState.joinChannel(joinMsg, chainID)
 
-	for _, ap := range joinMsg.AnchorPeers() {
+	for _, org := range joinMsg.Members() {
+		g.learnAnchorPeers(org, joinMsg.AnchorPeersOf(org))
+	}
+}
+
+func (g *gossipServiceImpl) learnAnchorPeers(orgOfAnchorPeers api.OrgIdentityType, anchorPeers []api.AnchorPeer) {
+	for _, ap := range anchorPeers {
 		if ap.Host == "" {
 			g.logger.Warning("Got empty hostname, skipping connecting to anchor peer", ap)
 			continue
@@ -191,20 +194,19 @@ func (g *gossipServiceImpl) JoinChan(joinMsg api.JoinChannelMessage, chainID com
 			continue
 		}
 
-		inOurOrg := bytes.Equal(g.selfOrg, ap.OrgID)
+		inOurOrg := bytes.Equal(g.selfOrg, orgOfAnchorPeers)
 		if !inOurOrg && g.selfNetworkMember().Endpoint == "" {
-			g.logger.Infof("Anchor peer %s:%d isn't in our org(%v) and we have no external endpoint, skipping", ap.Host, ap.Port, string(ap.OrgID))
+			g.logger.Infof("Anchor peer %s:%d isn't in our org(%v) and we have no external endpoint, skipping", ap.Host, ap.Port, string(orgOfAnchorPeers))
 			continue
 		}
-		anchorPeerOrg := ap.OrgID
 		isInOurOrg := func() bool {
-			identity, err := g.comm.Handshake(&comm.RemotePeer{Endpoint: endpoint})
+			remotePeerIdentity, err := g.comm.Handshake(&comm.RemotePeer{Endpoint: endpoint})
 			if err != nil {
 				g.logger.Warning("Deep probe of", endpoint, "failed:", err)
 				return false
 			}
-			isAnchorPeerInMyOrg := bytes.Equal(g.selfOrg, g.secAdvisor.OrgByPeerIdentity(identity))
-			if bytes.Equal(anchorPeerOrg, g.selfOrg) && !isAnchorPeerInMyOrg {
+			isAnchorPeerInMyOrg := bytes.Equal(g.selfOrg, g.secAdvisor.OrgByPeerIdentity(remotePeerIdentity))
+			if bytes.Equal(orgOfAnchorPeers, g.selfOrg) && !isAnchorPeerInMyOrg {
 				g.logger.Warning("Anchor peer", endpoint, "isn't in our org, but is claimed to be")
 			}
 			return isAnchorPeerInMyOrg
@@ -296,14 +298,6 @@ func (g *gossipServiceImpl) handleMessage(m proto.ReceivedMessage) {
 	if !g.validateMsg(m) {
 		g.logger.Warning("Message", msg, "isn't valid")
 		return
-	}
-
-	if msg.IsAliveMsg() {
-		added := g.aliveMsgStore.Add(msg)
-		if !added {
-			return
-		}
-		g.emitter.Add(msg)
 	}
 
 	if msg.IsChannelRestricted() {
